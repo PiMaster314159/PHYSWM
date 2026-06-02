@@ -26,7 +26,7 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "constants.py")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DATA_PATH = ROOT / "data" / "datasets" / "run01.h5"
+DATA_PATH = ROOT / "data" / "datasets" / "run02.h5"
 
 
 # ## Imports
@@ -62,6 +62,16 @@ class Encoder(nn.Module):
     channels : tuple of int
         Output channels for each conv layer. Length sets the number of
         stride-2 downsampling stages.
+
+    Notes
+    -----
+    BatchNorm1d on the projection head is intentional, not just for
+    normalization. The EP-based SIGReg loss has near-zero gradients when
+    latents are near zero (sin(t*h) -> 0 as h -> 0). BatchNorm keeps
+    latents off zero by construction, preventing gradient vanishing and
+    allowing SIGReg to shape the distribution effectively. This mirrors
+    the le-wm paper's design: "This step is necessary because [LayerNorm]
+    prevents our anti-collapse objective from being optimized effectively."
     """
 
     def __init__(
@@ -83,13 +93,14 @@ class Encoder(nn.Module):
             c_in = c_out
         self.conv = nn.Sequential(*layers)
 
-        # Measure the flattened size once so the linear head auto-sizes
-        # for any grid_size without manual calculation.
         with torch.no_grad():
             dummy    = torch.zeros(1, in_channels, grid_size, grid_size)
             flat_dim = self.conv(dummy).flatten(1).shape[1]
 
-        self.head = nn.Linear(flat_dim, latent_dim)
+        self.head = nn.Sequential(
+            nn.Linear(flat_dim, latent_dim),
+            nn.BatchNorm1d(latent_dim),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Encode a batch of frames.
@@ -148,7 +159,7 @@ class Predictor(nn.Module):
         """
         Parameters
         ----------
-        z      : (B, latent_dim)
+        z : (B, latent_dim)
         action : (B, action_dim)
 
         Returns
@@ -221,8 +232,8 @@ class JEPA(nn.Module):
         Returns
         -------
         dict with keys
-            z             : (B, D)  encoding of frame_t
-            pred_next_z   : (B, D)  predictor forecast of z_{t+1}
+            z : (B, D)  encoding of frame_t
+            pred_next_z : (B, D)  predictor forecast of z_{t+1}
             target_next_z : (B, D)  encoder output for next frame
         """
         z             = self.encode(frame)
@@ -238,18 +249,6 @@ class JEPA(nn.Module):
 # **Prediction loss**: MSE between the predicted next latent and the encoded next frame. Stop-gradient on the target prevents both ends of the shared encoder collapsing to the same constant and trivially zeroing the loss.
 # 
 # **SIGReg**: the Sketched-Isotropic-Gaussian Regularizer. Projects the batch of latents onto M random unit directions, then applies the univariate Epps-Pulley (EP) normality test to each projection. By the Cramer-Wold theorem, matching all 1D projections to N(0,1) implies the full joint distribution matches N(0, I). This is a provable anti-collapse guarantee.
-# 
-# The EP statistic for one projection h^(m) is:
-# 
-# ```
-# T^(m) = integral  w(t) * |ECF(t; h) - phi_0(t)|^2  dt
-# ```
-# 
-# where ECF is the empirical characteristic function of the projection, phi_0(t) = exp(-t^2/2) is the N(0,1) CF, and w(t) = exp(-t^2/2) is the weighting. The integral is approximated via trapezoid rule on [0.2, 4].
-# 
-# Why EP instead of raw moments: |ECF(t)| <= 1 always, so the statistic is bounded. Raw higher moments (skewness, kurtosis) divide by std^k and explode near collapse. EP does not.
-# 
-# SIGReg is applied to out["z"] (current frame encodings). Lambda = 1.0 as in the paper.
 
 # In[ ]:
 
@@ -274,60 +273,37 @@ def sigreg_loss(
     Parameters
     ----------
     z : (B, D)
-        Batch of latent vectors.
     n_projections : int
-        Number of random unit directions (M in the paper). Reference uses 1024.
+        Number of random unit directions. Reference uses 1024.
     n_quad : int
-        Quadrature nodes. Reference uses 17 nodes on [0, 3].
+        Quadrature nodes. Reference uses 17 on [0, 3].
     t_max : float
         Upper integration limit. Reference uses 3.0.
     eps : float
         Small constant for direction normalization.
-
-    Returns
-    -------
-    torch.Tensor
-        Scalar SIGReg loss (scaled by B, matching le-wm convention).
     """
     B, D = z.shape
 
-    # Quadrature nodes and trapezoid weights, following reference code exactly.
-    t  = torch.linspace(0.0, t_max, n_quad, device=z.device, dtype=z.dtype)  # (T,)
+    t  = torch.linspace(0.0, t_max, n_quad, device=z.device, dtype=z.dtype)
     dt = t_max / (n_quad - 1)
     w  = torch.full((n_quad,), 2.0 * dt, device=z.device, dtype=z.dtype)
-    w[0] = dt;  w[-1] = dt                       # trapezoid endpoint correction
-    phi0 = torch.exp(-t ** 2 / 2)                # N(0,1) CF: phi_0(t) = exp(-t^2/2)
-    combined_weights = w * phi0                  # trapezoid weights * window
+    w[0] = dt;  w[-1] = dt
+    phi0             = torch.exp(-t ** 2 / 2)
+    combined_weights = w * phi0
 
-    # Random unit directions on S^(D-1), fresh each call (the "sketched" in SIGReg).
     dirs = torch.randn(D, n_projections, device=z.device, dtype=z.dtype)
     dirs = dirs / (dirs.norm(dim=0, keepdim=True) + eps)
 
-    # 1D projections then scale by quadrature nodes.
-    # proj @ dirs : (B, n_projections)
-    # unsqueeze(-1) * t : (B, n_projections, n_quad)
-    x_t = (z @ dirs).unsqueeze(-1) * t           # (B, n_projections, n_quad)
+    x_t    = (z @ dirs).unsqueeze(-1) * t
+    ecf_re = x_t.cos().mean(0)
+    ecf_im = x_t.sin().mean(0)
 
-    # Empirical characteristic function (ECF):
-    #   Re[ECF(t)] = (1/B) sum_b cos(t * h_b)
-    #   Im[ECF(t)] = (1/B) sum_b sin(t * h_b)
-    # mean(-2) averages over B (the batch dimension).
-    ecf_re = x_t.cos().mean(0)                   # (n_projections, n_quad)
-    ecf_im = x_t.sin().mean(0)                   # (n_projections, n_quad)
-
-    # Epps-Pulley integrand: |ECF(t) - phi_0(t)|^2
-    # phi_0 is real, so |ECF - phi_0|^2 = (re - phi_0)^2 + im^2
-    err = (ecf_re - phi0) ** 2 + ecf_im ** 2    # (n_projections, n_quad)
-
-    # Weighted integral via dot product with combined weights, then scale by B.
-    T_stat = (err @ combined_weights) * B        # (n_projections,)
+    err    = (ecf_re - phi0) ** 2 + ecf_im ** 2
+    T_stat = (err @ combined_weights) * B
     return T_stat.mean()
 
 
-def jepa_loss(
-    out: dict,
-    lam: float = 1.0,
-) -> tuple:
+def jepa_loss(out: dict, lam: float = 1.0) -> tuple:
     """LeWM training loss: prediction MSE + SIGReg.
 
     Parameters
@@ -339,14 +315,14 @@ def jepa_loss(
 
     Returns
     -------
-    loss     : scalar total loss (has grad)
-    pred_loss: scalar MSE term   (detached, for logging)
-    sig_loss : scalar SIGReg term (detached, for logging)
+    total : scalar loss with grad
+    parts : dict with float entries pred, sigreg, total (detached, for logging)
     """
-    pred_loss = F.mse_loss(out["pred_next_z"], out["target_next_z"].detach())
-    sig_loss  = sigreg_loss(out["z"])
-    loss      = pred_loss + lam * sig_loss
-    return loss, pred_loss.detach(), sig_loss.detach()
+    pred  = F.mse_loss(out["pred_next_z"], out["target_next_z"].detach())
+    sig   = sigreg_loss(out["z"])
+    total = pred + lam * sig
+    parts = {"pred": pred.item(), "sigreg": sig.item(), "total": total.item()}
+    return total, parts
 
 
 def count_parameters(module: nn.Module) -> int:
@@ -414,13 +390,13 @@ def _test_jepa():
 
     # gradient wiring: loss must reach every parameter
     out = model(frame, action, next_frame)
-    loss, pred_loss, sig_loss = jepa_loss(out)
+    loss, parts = jepa_loss(out)
     assert torch.isfinite(loss), "loss is non-finite"
     model.zero_grad()
     loss.backward()
     for name, p in model.named_parameters():
         assert p.grad is not None, f"no gradient reached {name}"
-    print(f"gradient wiring OK  pred_loss={pred_loss:.4f}  sig_loss={sig_loss:.4f}")
+    print(f"gradient wiring OK  pred={parts['pred']:.4f}  sigreg={parts['sigreg']:.4f}")
 
     # real batch from the DataLoader
     if DATA_PATH.exists():
@@ -434,11 +410,11 @@ def _test_jepa():
         model = JEPA(grid_size=g, latent_dim=D)
         out   = model(batch["frame"], batch["action"], batch["next_frame"])
         assert out["pred_next_z"].shape == (16, D)
-        loss, pred_loss, sig_loss = jepa_loss(out)
+        loss, parts = jepa_loss(out)
         assert torch.isfinite(loss)
         print(f"real batch {tuple(batch['frame'].shape)} -> "
               f"pred_next_z {tuple(out['pred_next_z'].shape)}  "
-              f"loss={loss:.4f}  pred={pred_loss:.4f}  sigreg={sig_loss:.4f}")
+              f"loss={parts['total']:.4f}  pred={parts['pred']:.4f}  sigreg={parts['sigreg']:.4f}")
     else:
         print(f"(skipping real-batch test: {DATA_PATH} not found)")
 
