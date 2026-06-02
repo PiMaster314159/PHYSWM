@@ -26,7 +26,7 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "constants.py")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DATA_PATH = ROOT / "data" / "datasets" / "run02.h5"
+from config import DATA_PATH
 
 
 # ## Imports

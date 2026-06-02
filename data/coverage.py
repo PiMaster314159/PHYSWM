@@ -29,10 +29,11 @@
 import sys
 from pathlib import Path
 
-# Walk up from the current dir to find the project root (the folder with constants.py).
 ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "constants.py").exists())
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from config import DATA_PATH
 
 
 # ## Imports
@@ -382,5 +383,5 @@ def plot_coverage(h5_path: Union[str, Path], save_dir: Optional[Union[str, Path]
 
 
 if __name__ == "__main__":
-    plot_coverage(ROOT / "data" / "datasets" / "run01.h5")
+    plot_coverage(DATA_PATH)
 

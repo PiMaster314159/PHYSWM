@@ -26,8 +26,7 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "constants.py")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DATA_PATH = ROOT / "data" / "datasets" / "run02.h5"
-CKPT_DIR  = ROOT / "models" / "checkpoints"
+from config import DATA_PATH, CKPT_PATH
 
 
 # ## Path setup
@@ -38,6 +37,7 @@ CKPT_DIR  = ROOT / "models" / "checkpoints"
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from typing import Optional, Union
 
 try:
@@ -54,7 +54,7 @@ except ImportError:
 
 
 @torch.no_grad()
-def extract_latents(model: JEPA, dl, device: str):
+def extract_latents(model: JEPA, dl: DataLoader, device: str):
     """Run the frozen encoder over all batches; return (Z, states) as CPU tensors.
 
     Parameters

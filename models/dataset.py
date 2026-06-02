@@ -22,10 +22,11 @@
 import sys
 from pathlib import Path
 
-# Walk up from the current dir to find the project root (the folder with constants.py).
 ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "constants.py").exists())
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from config import DATA_PATH
 
 
 # ## Imports
@@ -35,6 +36,7 @@ if str(ROOT) not in sys.path:
 
 import h5py
 import numpy as np
+import numpy.typing as npt
 import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Optional, Union
@@ -66,7 +68,7 @@ class RobotTransitions(Dataset):
     def __init__(
         self,
         h5_path: Union[str, Path],
-        episodes=None,
+        episodes : Optional[npt.NDArray[np.int64]] = None,
         return_state: bool = False,
     ):
         with h5py.File(h5_path, "r") as f:
@@ -190,7 +192,7 @@ def make_dataloaders(
 
 def _test_dataset():
     """Sanity tests for RobotTransitions and make_dataloaders."""
-    h5_path = ROOT / "data" / "datasets" / "run01.h5"
+    h5_path = DATA_PATH
     assert h5_path.exists(), f"dataset not found: {h5_path}"
 
     ds = RobotTransitions(h5_path)

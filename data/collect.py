@@ -15,16 +15,17 @@
 # 
 # `collect.ipynb` lives in `data/`, one level below the project root. Add the root to `sys.path` so `constants` and `sim/` import cleanly, wherever the kernel's working directory happens to be.
 
-# In[15]:
+# In[ ]:
 
 
 import sys
 from pathlib import Path
 
-# Walk up from the current dir to find the project root (the folder with constants.py).
 ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "constants.py").exists())
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from config import DATA_PATH
 
 
 # ## Imports
@@ -436,11 +437,11 @@ def collect_dataset(
 # 
 # The real run. With the constants' sampling policy and `hold_k=4`, episodes average tens of steps before hitting a wall. Bump `hold_k` higher if they come out too short.
 
-# In[24]:
+# In[ ]:
 
 
 if __name__ == "__main__":
-    out = ROOT / "data" / "datasets" / "run02.h5"
+    out = DATA_PATH
     collect_dataset(out, n_episodes=5000, max_steps=100, hold_k=4, seed=0)
 
     # Write coverage diagnostics next to the dataset.
@@ -452,11 +453,11 @@ if __name__ == "__main__":
 # 
 # Quick read-back to confirm shapes, attrs, and an example trajectory survived the round-trip.
 
-# In[26]:
+# In[ ]:
 
 
 if __name__ == "__main__":
-    with h5py.File(ROOT / "data" / "datasets" / "run02.h5", "r") as f:
+    with h5py.File(DATA_PATH, "r") as f:
         print("datasets:")
         for name, ds in f.items():
             print(f"  {name:20s} shape={ds.shape}  dtype={ds.dtype}")

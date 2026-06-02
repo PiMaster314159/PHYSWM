@@ -18,16 +18,17 @@
 # 
 # Same root-finding pattern as `collect.ipynb` and `coverage.ipynb`.
 
-# In[30]:
+# In[ ]:
 
 
 import sys
 from pathlib import Path
 
-# Walk up from the current dir to find the project root (the folder with constants.py).
 ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "constants.py").exists())
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from config import DATA_PATH
 
 
 # ## Imports
@@ -86,16 +87,17 @@ def load_h5(h5_path: Union[str, Path], load_frames: bool = True) -> dict:
     return data
 
 
-# In[33]:
+# In[ ]:
 
 
-data = load_h5(ROOT / "data" / "datasets" / "run02.h5")
-frames          = data["frames"]
-states          = data["states"]
-actions         = data["actions"]
-episode_starts  = data["episode_starts"]
-episode_lengths = data["episode_lengths"]
-attrs           = data["attrs"]
+if __name__ == "__main__":
+    data = load_h5(DATA_PATH)
+    frames          = data["frames"]
+    states          = data["states"]
+    actions         = data["actions"]
+    episode_starts  = data["episode_starts"]
+    episode_lengths = data["episode_lengths"]
+    attrs           = data["attrs"]
 
 
 # ## Frame identity rate
@@ -131,11 +133,12 @@ def frame_identity_rate(
     return identical / total if total > 0 else 0.0
 
 
-# In[35]:
+# In[ ]:
 
 
-rate = frame_identity_rate(frames, episode_starts, episode_lengths)
-print(f"identical: {rate:.2%}")
+if __name__ == "__main__":
+    rate = frame_identity_rate(frames, episode_starts, episode_lengths)
+    print(f"identical: {rate:.2%}")
 
 
 # ## Per-step pixel-change distribution
@@ -183,14 +186,15 @@ def pixel_change_distribution(
     return diffs
 
 
-# In[37]:
+# In[ ]:
 
 
-_, ax = plt.subplots()
-diffs = pixel_change_distribution(frames, episode_starts, episode_lengths, ax=ax)
-plt.show()
-print(f"median: {int(np.median(diffs))} cells/step  |  "
-      f"zero-change steps: {(diffs == 0).mean():.1%}")
+if __name__ == "__main__":
+    _, ax = plt.subplots()
+    diffs = pixel_change_distribution(frames, episode_starts, episode_lengths, ax=ax)
+    plt.show()
+    print(f"median: {int(np.median(diffs))} cells/step  |  "
+          f"zero-change steps: {(diffs == 0).mean():.1%}")
 
 
 # ## θ quantization ceiling
@@ -247,15 +251,16 @@ def theta_quantization_ceiling(
 # In[ ]:
 
 
-results = theta_quantization_ceiling()
+if __name__ == "__main__":
+    results = theta_quantization_ceiling()
 
-# Frame strip at sample headings - makes the quantization coarseness visible.
-sample_thetas = np.radians([0, 15, 30, 45, 90, 135, 180])
-for grid_size in [40, 64, 84]:
-    strip = [render_frame([0.5, 0.5, t], grid_size=grid_size) for t in sample_thetas]
-    fig = show_frame_strip(strip, titles=[f"{int(np.degrees(t))}°" for t in sample_thetas])
-    fig.suptitle(f"{grid_size}x{grid_size}", y=1.02)
-    plt.show()
+    # Frame strip at sample headings - makes the quantization coarseness visible.
+    sample_thetas = np.radians([0, 15, 30, 45, 90, 135, 180])
+    for grid_size in [40, 64, 84]:
+        strip = [render_frame([0.5, 0.5, t], grid_size=grid_size) for t in sample_thetas]
+        fig = show_frame_strip(strip, titles=[f"{int(np.degrees(t))}°" for t in sample_thetas])
+        fig.suptitle(f"{grid_size}x{grid_size}", y=1.10)
+        plt.show()
 
 
 # In[ ]:
