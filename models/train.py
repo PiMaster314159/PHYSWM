@@ -10,7 +10,9 @@
 # > jupyter nbconvert --to python models/train.ipynb
 # > ```
 
-# In[ ]:
+# ## Path setup
+
+# In[1]:
 
 
 import sys
@@ -24,7 +26,7 @@ DATA_PATH = ROOT / "data" / "datasets" / "run02.h5"
 CKPT_DIR  = ROOT / "models" / "checkpoints"
 
 
-# ## Path setup
+# ## Imports
 
 # In[ ]:
 
@@ -32,6 +34,7 @@ CKPT_DIR  = ROOT / "models" / "checkpoints"
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+from typing import Optional, Union
 
 try:
     from models.jepa import JEPA, jepa_loss, sigreg_loss
@@ -41,13 +44,21 @@ except ImportError:
     from dataset import make_dataloaders
 
 
-# ## Imports
+# ## Evaluate
+# 
+# Runs a forward-only pass over a loader and returns average pred loss, SIGReg, and the collapse monitor (mean per-dim latent std). Called at the end of each epoch on the val set.
 
 # In[ ]:
 
 
 @torch.no_grad()
-def evaluate(model, dl, device, lam=0.01, max_batches=None):
+def evaluate(
+    model: JEPA,
+    dl,
+    device: str,
+    lam: float = 0.01,
+    max_batches: Optional[int] = None,
+) -> dict:
     """Mean pred/sigreg loss and latent std over a loader, no gradients.
 
     Parameters
@@ -78,9 +89,9 @@ def evaluate(model, dl, device, lam=0.01, max_batches=None):
         sigs.append(sigreg_loss(out["z"]).item())
         stds.append(out["z"].std(dim=0).mean().item())
     model.train()
-    n          = max(len(preds), 1)
-    pred_mean  = sum(preds) / n
-    sig_mean   = sum(sigs)  / n
+    n         = max(len(preds), 1)
+    pred_mean = sum(preds) / n
+    sig_mean  = sum(sigs)  / n
     return {
         "pred":       pred_mean,
         "sigreg":     sig_mean,
@@ -89,26 +100,28 @@ def evaluate(model, dl, device, lam=0.01, max_batches=None):
     }
 
 
-# ## Evaluate
+# ## Training loop
 # 
-# Runs a forward-only pass over a loader and returns average pred loss, SIGReg, and the collapse monitor (mean per-dim latent std). Called at the end of each epoch on the val set.
+# Standard PyTorch update loop. Logs loss components and the collapse monitor every `log_every` steps, evaluates on val at the end of each epoch, and saves the best-val-pred checkpoint.
+# 
+# Best-checkpointing matters here: prediction quality tends to peak after 1-2 epochs and then degrade as SIGReg keeps reshaping the latent space. `save_best_to` keeps the peak, `save_to` keeps the final epoch.
 
 # In[ ]:
 
 
 def train_jepa(
-    model,
+    model: JEPA,
     train_dl,
     val_dl=None,
-    epochs=5,
-    lr=1e-3,
-    lam=0.01,
-    device=None,
-    log_every=50,
-    max_batches=None,
-    save_to=None,
-    save_best_to=None,
-):
+    epochs: int = 5,
+    lr: float = 1e-3,
+    lam: float = 0.01,
+    device: Optional[str] = None,
+    log_every: int = 50,
+    max_batches: Optional[int] = None,
+    save_to: Optional[Union[str, Path]] = None,
+    save_best_to: Optional[Union[str, Path]] = None,
+) -> dict:
     """Train a JEPA model.
 
     Parameters
@@ -141,9 +154,9 @@ def train_jepa(
     model.to(device).train()
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
-    history   = {"train": [], "val": []}
-    best_val  = float("inf")
-    step      = 0
+    history  = {"train": [], "val": []}
+    best_val = float("inf")
+    step     = 0
 
     for epoch in range(epochs):
         for i, batch in enumerate(train_dl):
@@ -171,7 +184,7 @@ def train_jepa(
                       f"latent_std {parts['latent_std']:.3f}")
 
         if val_dl is not None:
-            v        = evaluate(model, val_dl, device, lam=lam, max_batches=50)
+            v         = evaluate(model, val_dl, device, lam=lam, max_batches=50)
             v["step"] = step
             history["val"].append(v)
             print(f"epoch {epoch+1}/{epochs}  val pred {v['pred']:.4f}  "
@@ -191,16 +204,17 @@ def train_jepa(
     return history
 
 
-# ## Training loop
+# ## Plot history
 # 
-# Standard PyTorch update loop. Logs loss components and the collapse monitor every `log_every` steps, evaluates on val at the end of each epoch, and saves the best-val-pred checkpoint.
-# 
-# Best-checkpointing matters here: prediction quality tends to peak after 1-2 epochs and then degrade as SIGReg keeps reshaping the latent space. `save_best_to` keeps the peak, `save_to` keeps the final epoch.
+# Two panels: loss components over steps (with val pred overlaid) and the collapse monitor. `latent_std` should stay near 1 throughout training. A drop toward 0 means collapse is winning.
 
 # In[ ]:
 
 
-def plot_history(history, save_to=None):
+def plot_history(
+    history: dict,
+    save_to: Optional[Union[str, Path]] = None,
+):
     """Plot training loss curves and the collapse monitor side by side.
 
     Parameters
@@ -215,7 +229,6 @@ def plot_history(history, save_to=None):
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
 
-    # left: loss components
     axes[0].plot(steps, [h["pred"]   for h in tr], label="pred")
     axes[0].plot(steps, [h["sigreg"] for h in tr], label="sigreg")
     axes[0].plot(steps, [h["total"]  for h in tr], label="total", lw=2, color="k")
@@ -228,7 +241,6 @@ def plot_history(history, save_to=None):
     axes[0].set_title("training losses")
     axes[0].legend()
 
-    # right: collapse monitor
     axes[1].plot(steps, [h["latent_std"] for h in tr], color="green")
     axes[1].axhline(1.0, ls="--", color="gray", alpha=0.6, label="target ~1")
     axes[1].set_ylim(bottom=0)
@@ -248,7 +260,7 @@ def plot_history(history, save_to=None):
 # 
 # Smoke test on real data: 2 epochs capped at 30 batches. Verifies that training records are produced, loss stays finite, and the latent does not collapse.
 
-# In[ ]:
+# In[6]:
 
 
 def _test_train():
@@ -276,13 +288,9 @@ def _test_train():
     print("All training tests passed.")
 
 
-# In[ ]:
+# In[7]:
 
 
 if __name__ == "__main__":
     _test_train()
 
-
-# ## Plot history
-# 
-# Two panels: loss components over steps (with val pred overlaid) and the collapse monitor. `latent_std` should stay near 1 throughout training. A drop toward 0 means collapse is winning.
