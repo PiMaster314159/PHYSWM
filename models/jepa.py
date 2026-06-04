@@ -26,7 +26,10 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").ex
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from config import DATA_PATH
+from config import (
+    DATA_PATH,
+    GRID_SIZE, IN_CHANNELS, LATENT_DIM, ENCODER_CHANNELS, PREDICTOR_HIDDEN, ACTION_DIM,
+)
 
 
 # ## Imports
@@ -63,6 +66,8 @@ class Encoder(nn.Module):
         Output channels for each conv layer. Length sets the number of
         stride-2 downsampling stages.
 
+    Defaults pull from config.py.
+
     Notes
     -----
     BatchNorm1d on the projection head is intentional, not just for
@@ -76,10 +81,10 @@ class Encoder(nn.Module):
 
     def __init__(
         self,
-        grid_size: int = 40,
-        in_channels: int = 1,
-        latent_dim: int = 128,
-        channels: tuple = (32, 64, 128),
+        grid_size: int = GRID_SIZE,
+        in_channels: int = IN_CHANNELS,
+        latent_dim: int = LATENT_DIM,
+        channels: tuple = ENCODER_CHANNELS,
     ):
         super().__init__()
         self.grid_size  = grid_size
@@ -120,15 +125,22 @@ class Encoder(nn.Module):
 
 # ## Predictor
 # 
-# MLP: `(z_t, action_t)` -> predicted `z_{t+1}`.
+# Residual MLP: `z_{t+1} = z_t + mlp(z_t, action_t)`.
 # 
-# Concatenates the current latent and raw `(v, omega)` action, passes through three linear layers. No action encoder needed. `(v, omega)` are already clean physical signals and the MLP learns to weight them.
+# Predicts the *change* and adds it to the current latent. Per-step motion is tiny, so the next latent is nearly the current one, which makes identity (next = current) a strong baseline. The residual form makes identity the default at init, so the MLP only learns the small action-dependent correction instead of rebuilding the next latent from scratch. Concatenates the current latent and raw `(v, omega)` action; no action encoder needed.
 
 # In[ ]:
 
 
 class Predictor(nn.Module):
-    """MLP: (z_t, action_t) -> predicted next latent.
+    """Residual MLP: (z_t, action_t) -> predicted next latent.
+
+    Predicts the change and adds it: `z_{t+1} = z_t + mlp(z_t, action)`. Because
+    per-step motion is tiny, identity (next = current) is a strong baseline. The
+    residual form makes identity the default at init, so the MLP only learns the
+    small action-dependent correction rather than rebuilding the whole next
+    latent from scratch. This is also the natural slot for known kinematics later
+    (swap the learned delta for a physics delta).
 
     Parameters
     ----------
@@ -138,13 +150,15 @@ class Predictor(nn.Module):
         Raw action size. 2 for (v, omega).
     hidden : int
         Hidden layer width.
+
+    Defaults pull from config.py.
     """
 
     def __init__(
         self,
-        latent_dim: int = 128,
-        action_dim: int = 2,
-        hidden: int = 256,
+        latent_dim: int = LATENT_DIM,
+        action_dim: int = ACTION_DIM,
+        hidden: int = PREDICTOR_HIDDEN,
     ):
         super().__init__()
         self.net = nn.Sequential(
@@ -165,8 +179,9 @@ class Predictor(nn.Module):
         Returns
         -------
         (B, latent_dim)
+            z plus the predicted residual.
         """
-        return self.net(torch.cat([z, action], dim=-1))
+        return z + self.net(torch.cat([z, action], dim=-1))
 
 
 # ## JEPA
@@ -191,14 +206,16 @@ class JEPA(nn.Module):
         Conv channel widths for the encoder.
     predictor_hidden : int
         Predictor MLP hidden width.
+
+    Defaults pull from config.py.
     """
 
     def __init__(
         self,
-        grid_size: int = 40,
-        latent_dim: int = 128,
-        encoder_channels: tuple = (32, 64, 128),
-        predictor_hidden: int = 256,
+        grid_size: int = GRID_SIZE,
+        latent_dim: int = LATENT_DIM,
+        encoder_channels: tuple = ENCODER_CHANNELS,
+        predictor_hidden: int = PREDICTOR_HIDDEN,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -209,7 +226,7 @@ class JEPA(nn.Module):
         )
         self.predictor  = Predictor(
             latent_dim=latent_dim,
-            action_dim=2,
+            action_dim=ACTION_DIM,
             hidden=predictor_hidden,
         )
 

@@ -26,7 +26,7 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").ex
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from config import DATA_PATH
+from config import DATA_PATH, BATCH_SIZE, SEED
 
 
 # ## Imports
@@ -141,9 +141,9 @@ class RobotTransitions(Dataset):
 
 def make_dataloaders(
     h5_path: Union[str, Path],
-    batch_size: int = 128,
+    batch_size: int = BATCH_SIZE,
     val_frac: float = 0.1,
-    seed: int = 0,
+    seed: int = SEED,
     return_state: bool = False,
     num_workers: int = 0,
 ) -> tuple:
@@ -154,10 +154,11 @@ def make_dataloaders(
     h5_path : str or Path
         Input .h5 file from collect_dataset.
     batch_size : int
+        Default from config.
     val_frac : float
         Fraction of episodes held out for validation.
     seed : int
-        RNG seed for the episode shuffle.
+        RNG seed for the episode shuffle. Default from config.
     return_state : bool
         Passed through to RobotTransitions. Eval/probe use only.
     num_workers : int

@@ -22,7 +22,7 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").ex
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from config import DATA_PATH, CKPT_PATH
+from config import DATA_PATH, CKPT_PATH, LR, LAM, EPOCHS
 
 
 # ## Imports
@@ -55,7 +55,7 @@ def evaluate(
     model: JEPA,
     dl,
     device: str,
-    lam: float = 0.01,
+    lam: float = LAM,
     max_batches: Optional[int] = None,
 ) -> dict:
     """Mean pred/sigreg loss and latent std over a loader, no gradients.
@@ -66,7 +66,7 @@ def evaluate(
     dl : DataLoader
     device : str
     lam : float
-        Used to compute the total for the returned dict.
+        Used to compute the total for the returned dict. Default from config.
     max_batches : int, optional
         Cap on batches evaluated. Useful for quick val passes.
 
@@ -112,9 +112,9 @@ def train_jepa(
     model: JEPA,
     train_dl,
     val_dl=None,
-    epochs: int = 5,
-    lr: float = 1e-3,
-    lam: float = 0.01,
+    epochs: int = EPOCHS,
+    lr: float = LR,
+    lam: float = LAM,
     device: Optional[str] = None,
     log_every: int = 50,
     max_batches: Optional[int] = None,
@@ -144,6 +144,8 @@ def train_jepa(
     save_best_to : str or Path, optional
         Save the lowest-val-pred checkpoint here. Usually the one you want,
         since this task tends to peak early and then degrade.
+
+    epochs, lr, lam default from config.py.
 
     Returns
     -------

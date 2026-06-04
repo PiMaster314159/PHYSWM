@@ -38,7 +38,10 @@ import matplotlib.pyplot as plt
 import h5py
 from typing import Optional, Union
 
-from config import DT, WORLD_BOUNDS, V_MEAN, V_STD, OMEGA_MEAN, OMEGA_STD
+from config import (
+    DT, WORLD_BOUNDS, V_MEAN, V_STD, OMEGA_MEAN, OMEGA_STD,
+    GRID_SIZE, HOLD_K, MAX_STEPS, N_EPISODES, SEED,
+)
 from sim.render import render_frame
 from sim.environment import env_step, bounding_radius
 from sim.visualize import show_frame_strip, show_trajectory
@@ -300,23 +303,23 @@ if __name__ == "__main__":
 # 
 # Every generative parameter is stored as an HDF5 attr, so the file is self-describing: `h5py.File(...).attrs` tells you exactly what produced it.
 
-# In[23]:
+# In[ ]:
 
 
 def collect_dataset(
     path: Union[str, Path],
-    n_episodes: int,
-    max_steps: int = 500,
-    grid_size: int = 40,
+    n_episodes: int = N_EPISODES,
+    max_steps: int = MAX_STEPS,
+    grid_size: int = GRID_SIZE,
     world_bounds: tuple = WORLD_BOUNDS,
     dt: float = DT,
-    hold_k: int = 1,
+    hold_k: int = HOLD_K,
     v_mean: float = V_MEAN,
     v_std: float = V_STD,
     omega_mean: float = OMEGA_MEAN,
     omega_std: float = OMEGA_STD,
     min_length: int = 10,
-    seed: int = 0,
+    seed: int = SEED,
     progress_every: int = 100,
 ) -> None:
     """Stream `n_episodes` random-action episodes to an HDF5 file.
@@ -335,6 +338,8 @@ def collect_dataset(
         Seeds the `np.random.default_rng` used for everything.
     progress_every : int
         Print a progress line every N attempted episodes.
+
+    n_episodes, max_steps, grid_size, hold_k, seed default from config.py.
 
     Notes
     -----
@@ -442,7 +447,7 @@ def collect_dataset(
 
 if __name__ == "__main__":
     out = DATA_PATH
-    collect_dataset(out, n_episodes=5000, max_steps=100, hold_k=4, seed=0)
+    collect_dataset(out, n_episodes=N_EPISODES, max_steps=MAX_STEPS, hold_k=HOLD_K, seed=SEED)
 
     # Write coverage diagnostics next to the dataset.
     from data.coverage import plot_coverage
