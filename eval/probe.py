@@ -26,7 +26,7 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").ex
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from config import DATA_PATH, CKPT_PATH, SEED
+from config import DATA_PATH, CKPT_PATH, SEED, REPORT_DIR
 
 
 # ## Path setup
@@ -287,6 +287,30 @@ def _print_table(results: dict) -> None:
         print(f"{name:11s}" + "".join(f"{m[c]:>17.4f}" for c in cols))
 
 
+def save_probe_table(results: dict, path: Union[str, Path]) -> None:
+    """Write the probe metrics table to a CSV file (mirrors _print_table).
+
+    Parameters
+    ----------
+    results : dict
+        Output of run_probe. Keys chance, linear, mlp.
+    path : str or Path
+        Output .csv file. Parent directory is created if missing.
+    """
+    import csv
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cols = ["pos_rmse", "x_rmse", "y_rmse", "theta_mae_deg", "theta_median_deg",
+            "x_r2", "y_r2"]
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["probe"] + cols)
+        for name in ("chance", "linear", "mlp"):
+            if name in results:
+                writer.writerow([name] + [f"{results[name][c]:.4f}" for c in cols])
+    print(f"wrote {path}")
+
+
 # ## Run probe
 # 
 # Load a checkpoint, extract frozen latents, fit both probes, and print a comparison table against the chance baseline.
@@ -303,6 +327,7 @@ def run_probe(
     probe_epochs: int = 40,
     device: Optional[str] = None,
     seed: int = 0,
+    save_dir: Optional[Union[str, Path]] = None,
     verbose: bool = True,
 ) -> dict:
     """Probe a trained JEPA for (x, y, theta). Returns a results dict.
@@ -323,6 +348,8 @@ def run_probe(
     device : str, optional
     seed : int
         Must match the seed used during JEPA training to get the same episode split.
+    save_dir : str or Path, optional
+        If given, write the metrics table to save_dir/probe_metrics.csv.
     verbose : bool
 
     Returns
@@ -360,6 +387,8 @@ def run_probe(
 
     if verbose:
         _print_table(results)
+    if save_dir is not None:
+        save_probe_table(results, Path(save_dir) / "probe_metrics.csv")
     return results
 
 
@@ -612,8 +641,10 @@ if __name__ == "__main__":
         model.load_state_dict(torch.load(CKPT_PATH, map_location="cpu"))
         Z_val, S_val = extract_latents(model, val_dl, "cpu")
 
-        plot_latent_pca(Z_val, S_val)           # max-variance view (SIGReg flattens it)
-        plot_latent_probe_axes(Z_val, S_val)    # position/heading-decode view (the map)
+        # archive table + figures for this run under results/<RUN>/
+        run_probe(ckpt_path=CKPT_PATH, seed=SEED, save_dir=REPORT_DIR)
+        plot_latent_pca(Z_val, S_val, save_to=REPORT_DIR / "latent_pca.png")
+        plot_latent_probe_axes(Z_val, S_val, save_to=REPORT_DIR / "latent_probe_axes.png")
         plt.show()
     else:
         print(f"no checkpoint at {CKPT_PATH} - train one first (pipeline.ipynb)")

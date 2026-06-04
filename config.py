@@ -22,6 +22,10 @@ CHECKPOINTS_DIR = ROOT / "models" / "checkpoints"
 DATA_PATH = DATASETS_DIR / f"{RUN}.h5"
 CKPT_PATH = CHECKPOINTS_DIR / f"{RUN}_jepa.pt"
 
+# Per-run report folder: probe metrics table + figures land here.
+RESULTS_DIR = ROOT / "results"
+REPORT_DIR  = RESULTS_DIR / RUN
+
 # Shared RNG seed. train and probe must use the SAME seed so the probe scores
 # on the exact held-out episodes the encoder never trained on.
 SEED = 0
