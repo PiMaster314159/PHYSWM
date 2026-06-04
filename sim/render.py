@@ -16,7 +16,7 @@
 
 # ## Imports & triangle constants
 # 
-# Triangle dimensions `L`, `W` and `WORLD_BOUNDS` come from the project-wide `constants.py` (single source for the whole project).
+# Triangle dimensions `L`, `W` and `WORLD_BOUNDS` come from the project-wide `config.py` (single source for the whole project).
 
 # In[ ]:
 
@@ -24,7 +24,7 @@
 import numpy as np
 import numpy.typing as npt
 
-from constants import L, W, WORLD_BOUNDS
+from config import L, W, WORLD_BOUNDS
 
 
 # ## Triangle in local coordinates

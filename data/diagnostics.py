@@ -24,7 +24,7 @@
 import sys
 from pathlib import Path
 
-ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "constants.py").exists())
+ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").exists())
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 

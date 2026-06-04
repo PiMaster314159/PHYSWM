@@ -14,9 +14,9 @@
 
 # ## Imports
 # 
-# `step` and `_as_state` from `sim.dynamics`; the fixed constants `DT`, `L`, `W`, `WORLD_BOUNDS` from `constants.py`.
+# `step` and `_as_state` from `sim.dynamics`; the fixed constants `DT`, `L`, `W`, `WORLD_BOUNDS` from `config.py`.
 # 
-# Run from the `PHYSWM` root so both `constants` and `sim.*` resolve.
+# Run from the `PHYSWM` root so both `config` and `sim.*` resolve.
 
 # In[ ]:
 
@@ -25,7 +25,7 @@ import numpy as np
 import numpy.typing as npt
 from typing import Optional
 
-from constants import DT, L, W, WORLD_BOUNDS
+from config import DT, L, W, WORLD_BOUNDS
 from sim.dynamics import step, _as_state
 
 

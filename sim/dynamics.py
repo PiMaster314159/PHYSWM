@@ -24,7 +24,7 @@
 
 import numpy as np
 import numpy.typing as npt
-from constants import DT
+from config import DT
 
 
 # ## Angle wrapping

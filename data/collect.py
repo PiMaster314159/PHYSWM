@@ -13,7 +13,7 @@
 
 # ## Path setup
 # 
-# `collect.ipynb` lives in `data/`, one level below the project root. Add the root to `sys.path` so `constants` and `sim/` import cleanly, wherever the kernel's working directory happens to be.
+# `collect.ipynb` lives in `data/`, one level below the project root. Add the root to `sys.path` so `config` and `sim/` import cleanly, wherever the kernel's working directory happens to be.
 
 # In[ ]:
 
@@ -21,7 +21,7 @@
 import sys
 from pathlib import Path
 
-ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "constants.py").exists())
+ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").exists())
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -30,7 +30,7 @@ from config import DATA_PATH
 
 # ## Imports
 
-# In[16]:
+# In[ ]:
 
 
 import numpy as np
@@ -38,7 +38,7 @@ import matplotlib.pyplot as plt
 import h5py
 from typing import Optional, Union
 
-from constants import DT, WORLD_BOUNDS, V_MEAN, V_STD, OMEGA_MEAN, OMEGA_STD
+from config import DT, WORLD_BOUNDS, V_MEAN, V_STD, OMEGA_MEAN, OMEGA_STD
 from sim.render import render_frame
 from sim.environment import env_step, bounding_radius
 from sim.visualize import show_frame_strip, show_trajectory
@@ -46,7 +46,7 @@ from sim.visualize import show_frame_strip, show_trajectory
 
 # ## Action sampling
 # 
-# `v ~ N(v_mean, v_std)` clipped to `[0, 1]` (forward only). `omega ~ N(omega_mean, omega_std)` clipped to `[-pi/2, pi/2]` for reasonable single-step turns. Defaults come from `constants.py`; override per call if needed.
+# `v ~ N(v_mean, v_std)` clipped to `[0, 1]` (forward only). `omega ~ N(omega_mean, omega_std)` clipped to `[-pi/2, pi/2]` for reasonable single-step turns. Defaults come from `config.py`; override per call if needed.
 
 # In[17]:
 

@@ -24,7 +24,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from typing import Optional, Sequence
 
-from constants import WORLD_BOUNDS
+from config import WORLD_BOUNDS
 
 
 # ## Input-validation helper

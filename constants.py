@@ -10,14 +10,5 @@
 # In[ ]:
 
 
-DT = 0.1                                 # simulation timestep
-L = 0.12                                 # triangle length (altitude) in world units
-W = 0.06                                 # triangle base width in world units
-WORLD_BOUNDS = ((0.0, 1.0), (0.0, 1.0))  # ((x_min, x_max), (y_min, y_max))
 
-# Action sampling (random-walk policy for data collection)
-V_MEAN = 0.18      # mean linear velocity
-V_STD = 0.05       # linear-velocity spread
-OMEGA_MEAN = 0.0   # mean angular velocity (no turn bias)
-OMEGA_STD = 0.6    # angular-velocity spread
 
