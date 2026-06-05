@@ -16,7 +16,7 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").ex
 
 # --- Active run + paths ----------------------------------------------------
 # Change RUN to repoint every dataset, checkpoint, and report folder at once.
-RUN = "run01_40x40"
+RUN = "run03_128x128"
 
 DATASETS_DIR    = ROOT / "data" / "datasets"
 CHECKPOINTS_DIR = ROOT / "models" / "checkpoints"
@@ -45,7 +45,7 @@ WORLD_BOUNDS = ((0.0, 1.0), (0.0, 1.0))  # ((x_min, x_max), (y_min, y_max))
 N_EPISODES = 5000
 MAX_STEPS  = 100
 HOLD_K     = 4
-GRID_SIZE  = 40        # render resolution; must match the dataset's stored grid_size
+GRID_SIZE  = 128        # render resolution; must match the dataset's stored grid_size
 
 # Action-sampling policy (random-walk). Not frozen; collect_dataset can override.
 V_MEAN = 0.18      # mean linear velocity
@@ -62,6 +62,6 @@ ACTION_DIM       = 2               # (v, omega)
 
 # --- Training --------------------------------------------------------------
 LR         = 1e-3
-LAM        = 0.01   # SIGReg weight
+LAM        = 0.005   # SIGReg weight
 EPOCHS     = 10
-BATCH_SIZE = 128
+BATCH_SIZE = 256
