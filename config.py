@@ -6,6 +6,12 @@ Imported as `from config import ...`. Run everything from the PHYSWM root.
 Plain hand-edited module (no notebook source) - edit it directly. Module
 defaults across the codebase (encoder dims, training knobs, collection params)
 pull from the values here, so changing a value once changes it everywhere.
+
+Two identities, kept separate:
+  RUN        - the DATASET (.h5). One dataset feeds many model experiments.
+  EXPERIMENT - the MODEL run (checkpoint + results). Auto-built at the bottom
+               from the dataset + the knobs that define a run, so the folder
+               name always says exactly what produced it.
 """
 
 from pathlib import Path
@@ -14,19 +20,15 @@ from pathlib import Path
 # imports resolve no matter where a notebook kernel was started.
 ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").exists())
 
-# --- Active run + paths ----------------------------------------------------
-# Change RUN to repoint every dataset, checkpoint, and report folder at once.
-RUN = "run03_128x128"
-
 DATASETS_DIR    = ROOT / "data" / "datasets"
 CHECKPOINTS_DIR = ROOT / "models" / "checkpoints"
+RESULTS_DIR     = ROOT / "results"
 
+# --- Dataset --------------------------------------------------------------
+# RUN names the .h5 file only. It is shared across model experiments, so it
+# does NOT name the checkpoint or results (those are per-experiment, below).
+RUN       = "run03_128x128"
 DATA_PATH = DATASETS_DIR / f"{RUN}.h5"
-CKPT_PATH = CHECKPOINTS_DIR / f"{RUN}_jepa_long.pt"
-
-# Per-run report folder: probe metrics table + figures land here.
-RESULTS_DIR = ROOT / "results"
-REPORT_DIR  = RESULTS_DIR / f"{RUN}_long"
 
 # Shared RNG seed. train and probe must use the SAME seed so the probe scores
 # on the exact held-out episodes the encoder never trained on.
@@ -46,6 +48,7 @@ N_EPISODES = 5000
 MAX_STEPS  = 100
 HOLD_K     = 4
 GRID_SIZE  = 128        # render resolution; must match the dataset's stored grid_size
+PRED_STEP  = 1          # transition horizon in steps (1 = single step). Must divide HOLD_K so each transition spans one action.
 
 # Action-sampling policy (random-walk). Not frozen; collect_dataset can override.
 V_MEAN = 0.18      # mean linear velocity
@@ -59,9 +62,22 @@ LATENT_DIM       = 128
 ENCODER_CHANNELS = (32, 64, 128)   # output channels per stride-2 conv stage
 PREDICTOR_HIDDEN = 256
 ACTION_DIM       = 2               # (v, omega)
+PREDICTOR_MODE   = "residual"      # "mlp" | "residual" | "physics"
 
 # --- Training --------------------------------------------------------------
 LR         = 1e-3
 LAM        = 0.005   # SIGReg weight
 EPOCHS     = 10
 BATCH_SIZE = 256
+
+# --- Experiment identity ---------------------------------------------------
+# Names the checkpoint and the results folder. Auto-built from the dataset plus
+# the knobs that define a model run, so you never hand-rename folders and the
+# name is self-describing. NOTE is an optional manual label for one-offs (e.g.
+# a learning-rate sweep): set NOTE = "lr2e3" and it gets appended.
+TAG        = f"{PREDICTOR_MODE}_s{PRED_STEP}_e{EPOCHS}"   # e.g. "physics_s4_e10"
+NOTE       = ""
+EXPERIMENT = f"{RUN}_{TAG}" + (f"_{NOTE}" if NOTE else "")
+
+CKPT_PATH  = CHECKPOINTS_DIR / f"{EXPERIMENT}.pt"
+REPORT_DIR = RESULTS_DIR / EXPERIMENT

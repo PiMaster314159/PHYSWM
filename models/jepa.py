@@ -27,8 +27,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config import (
-    DATA_PATH,
-    GRID_SIZE, IN_CHANNELS, LATENT_DIM, ENCODER_CHANNELS, PREDICTOR_HIDDEN, ACTION_DIM,
+    DATA_PATH, DT, PRED_STEP,
+    GRID_SIZE, IN_CHANNELS, LATENT_DIM, ENCODER_CHANNELS,
+    PREDICTOR_HIDDEN, ACTION_DIM, PREDICTOR_MODE,
 )
 
 
@@ -125,31 +126,56 @@ class Encoder(nn.Module):
 
 # ## Predictor
 # 
-# Residual MLP: `z_{t+1} = z_t + mlp(z_t, action_t)`.
+# Predicts the next latent as `base(z, a) + mlp(z, a)`. A `mode` switch picks the base, which is the only thing that differs between the three variants:
 # 
-# Predicts the *change* and adds it to the current latent. Per-step motion is tiny, so the next latent is nearly the current one, which makes identity (next = current) a strong baseline. The residual form makes identity the default at init, so the MLP only learns the small action-dependent correction instead of rebuilding the next latent from scratch. Concatenates the current latent and raw `(v, omega)` action; no action encoder needed.
+# - `mlp`: base = 0, predict the next latent from scratch.
+# - `residual`: base = z, predict the change; identity (next = current) is the default at init.
+# - `physics`: base = z + a learnable-scaled unicycle kinematic step on the first 3 latent dims (read as x, y, theta).
+# 
+# The physics base uses only the latent's own dims 0, 1, 2 and the action; no ground-truth pose leaks in. Two learnable scalars (`a_pos`, `a_theta`) bridge latent units and physical units: BatchNorm forces every latent dim to ~unit variance, but the kinematics want position in world units and heading in radians, so `a_pos` amplifies the tiny physical step (`dt·v ≈ 0.018`) to a latent-scale change and `a_theta` reads `z2` as a true angle. This pegs dims 0-2 to pose: to make the base accurate the encoder must put a faithful heading in `z2`. The learned MLP corrects the base and handles the other dims. Set the mode in `config.py` (`PREDICTOR_MODE`).
 
 # In[ ]:
 
 
 class Predictor(nn.Module):
-    """Residual MLP: (z_t, action_t) -> predicted next latent.
+    """Predicts the next latent as base(z, a) + a learned MLP correction.
 
-    Predicts the change and adds it: `z_{t+1} = z_t + mlp(z_t, action)`. Because
-    per-step motion is tiny, identity (next = current) is a strong baseline. The
-    residual form makes identity the default at init, so the MLP only learns the
-    small action-dependent correction rather than rebuilding the whole next
-    latent from scratch. This is also the natural slot for known kinematics later
-    (swap the learned delta for a physics delta).
+    The `mode` selects the base, the only difference between the three variants:
+
+      "mlp"      base = 0       predict the next latent from scratch
+      "residual" base = z       predict the change; identity default
+      "physics"  base = z + a learnable-scaled unicycle step on dims 0, 1, 2
+
+    The physics base reads dims 0, 1, 2 as (x, y, theta):
+
+        theta = a_theta * z2
+        z0_next = z0 + a_pos * dt * v * cos(theta)
+        z1_next = z1 + a_pos * dt * v * sin(theta)
+        z2_next = z2 + (dt * omega) / a_theta
+
+    using only the latent's own values and the action (no ground-truth state
+    leaks in). a_pos and a_theta are learnable scalars (kept in log-space so they
+    stay positive; both start at 1). They bridge latent units and physical units:
+    BatchNorm forces unit-variance latents, but the kinematics want z0,z1 in world
+    units and z2 in radians. a_pos amplifies the tiny physical step (dt*v ~ 0.018)
+    to a latent-scale change; a_theta lets z2 sit at unit variance yet be read as a
+    true heading. Without them the kinematic term is a ~2% nudge on identity and
+    barely shapes anything. To make the base accurate the encoder must put a
+    faithful heading in z2, which is the pressure the plain objective lacks.
 
     Parameters
     ----------
     latent_dim : int
-        Size of z, both input and output.
     action_dim : int
         Raw action size. 2 for (v, omega).
     hidden : int
-        Hidden layer width.
+        MLP hidden width.
+    mode : {"mlp", "residual", "physics"}
+        Which base to add the learned correction to.
+    dt : float
+        Timestep for the physics base. Defaults to PRED_STEP * DT, so a multi-step
+        transition integrates over its full horizon (a single Euler step of that
+        size; the learned MLP corrects the approximation).
 
     Defaults pull from config.py.
     """
@@ -159,29 +185,50 @@ class Predictor(nn.Module):
         latent_dim: int = LATENT_DIM,
         action_dim: int = ACTION_DIM,
         hidden: int = PREDICTOR_HIDDEN,
+        mode: str = PREDICTOR_MODE,
+        dt: float = PRED_STEP * DT,
     ):
         super().__init__()
-        self.net = nn.Sequential(
+        if mode not in ("mlp", "residual", "physics"):
+            raise ValueError(f"mode must be mlp/residual/physics, got {mode!r}")
+        if mode == "physics" and latent_dim < 3:
+            raise ValueError("physics mode needs latent_dim >= 3 (uses dims 0,1,2)")
+        self.mode = mode
+        self.dt   = dt
+        self.net  = nn.Sequential(
             nn.Linear(latent_dim + action_dim, hidden),
             nn.ReLU(inplace=True),
             nn.Linear(hidden, hidden),
             nn.ReLU(inplace=True),
             nn.Linear(hidden, latent_dim),
         )
+        if mode == "physics":
+            # learnable unit-bridging scales, log-space so they stay positive (=1 at init)
+            self.log_a_pos   = nn.Parameter(torch.zeros(()))
+            self.log_a_theta = nn.Parameter(torch.zeros(()))
+
+    def _physics_base(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        """z + learnable-scaled unicycle step on dims 0,1,2 (read as x, y, theta)."""
+        a_pos   = self.log_a_pos.exp()
+        a_theta = self.log_a_theta.exp()
+        v     = action[:, 0:1]              # (B, 1)
+        omega = action[:, 1:2]
+        theta = a_theta * z[:, 2:3]
+        dx   = a_pos * self.dt * v * torch.cos(theta)
+        dy   = a_pos * self.dt * v * torch.sin(theta)
+        dth  = (self.dt * omega) / a_theta
+        rest = torch.zeros_like(z[:, 3:])   # other dims: no kinematic change
+        delta = torch.cat([dx, dy, dth, rest], dim=1)
+        return z + delta
 
     def forward(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        """
-        Parameters
-        ----------
-        z : (B, latent_dim)
-        action : (B, action_dim)
-
-        Returns
-        -------
-        (B, latent_dim)
-            z plus the predicted residual.
-        """
-        return z + self.net(torch.cat([z, action], dim=-1))
+        """(z: (B, D), action: (B, action_dim)) -> predicted next latent (B, D)."""
+        learned = self.net(torch.cat([z, action], dim=-1))
+        if self.mode == "mlp":
+            return learned
+        if self.mode == "residual":
+            return z + learned
+        return self._physics_base(z, action) + learned
 
 
 # ## JEPA
@@ -206,6 +253,8 @@ class JEPA(nn.Module):
         Conv channel widths for the encoder.
     predictor_hidden : int
         Predictor MLP hidden width.
+    predictor_mode : {"mlp", "residual", "physics"}
+        Predictor base. See Predictor.
 
     Defaults pull from config.py.
     """
@@ -216,6 +265,7 @@ class JEPA(nn.Module):
         latent_dim: int = LATENT_DIM,
         encoder_channels: tuple = ENCODER_CHANNELS,
         predictor_hidden: int = PREDICTOR_HIDDEN,
+        predictor_mode: str = PREDICTOR_MODE,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -228,6 +278,7 @@ class JEPA(nn.Module):
             latent_dim=latent_dim,
             action_dim=ACTION_DIM,
             hidden=predictor_hidden,
+            mode=predictor_mode,
         )
 
     def encode(self, frame: torch.Tensor) -> torch.Tensor:
@@ -379,6 +430,19 @@ def _test_jepa():
         m = JEPA(grid_size=g, latent_dim=32)
         o = m(torch.rand(2, 1, g, g), torch.rand(2, 2), torch.rand(2, 1, g, g))
         assert o["pred_next_z"].shape == (2, 32), (g, o["pred_next_z"].shape)
+
+    # predictor modes: all three build + run; physics scales receive gradient
+    for mode in ("mlp", "residual", "physics"):
+        mm = JEPA(grid_size=40, latent_dim=D, predictor_mode=mode)
+        oo = mm(frame, action, next_frame)
+        assert oo["pred_next_z"].shape == (B, D), (mode, oo["pred_next_z"].shape)
+        if mode == "physics":
+            ll, _ = jepa_loss(oo)
+            mm.zero_grad()
+            ll.backward()
+            assert mm.predictor.log_a_pos.grad   is not None, "a_pos got no gradient"
+            assert mm.predictor.log_a_theta.grad is not None, "a_theta got no gradient"
+    print("predictor modes mlp/residual/physics build + run OK (physics scales trainable)")
 
     # action sensitivity: different action -> different prediction
     z  = model.encode(frame)
