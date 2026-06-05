@@ -62,7 +62,7 @@ def extract_latents(model: JEPA, dl: DataLoader, device: str):
     Parameters
     ----------
     model : JEPA
-        Set to eval mode internally.
+        Moved to `device` and set to eval mode internally.
     dl : DataLoader
         Must be constructed with return_state=True.
     device : str
@@ -72,7 +72,7 @@ def extract_latents(model: JEPA, dl: DataLoader, device: str):
     Z : (N, latent_dim) float32
     states : (N, 3) float32 -- true (x, y, theta)
     """
-    model.eval()
+    model.to(device).eval()   # move the model too, not just the input batch
     zs, states = [], []
     for batch in dl:
         z = model.encode(batch["frame"].to(device))
