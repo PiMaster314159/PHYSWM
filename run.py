@@ -47,6 +47,8 @@ def parse_args():
     # dataset
     p.add_argument("--run", default=C.RUN, help="dataset name (.h5 stem)")
     p.add_argument("--grid-size", type=int, default=C.GRID_SIZE)
+    p.add_argument("--nose-marker", default=C.RENDER_MARKER, choices=["none", "dot"],
+                   help="heading cue baked into a freshly collected dataset (grayscale if set)")
     # model + horizon (the usual sweep axes)
     p.add_argument("--predictor-mode", default=C.PREDICTOR_MODE,
                    choices=["mlp", "residual", "physics"])
@@ -98,7 +100,7 @@ def main():
 
     # collect the dataset if it does not exist yet
     if not data_path.exists():
-        collect_dataset(data_path, grid_size=a.grid_size)
+        collect_dataset(data_path, grid_size=a.grid_size, marker=a.nose_marker)
 
     # train
     torch.manual_seed(C.SEED)

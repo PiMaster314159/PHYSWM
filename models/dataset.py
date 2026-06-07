@@ -230,7 +230,9 @@ def _test_dataset():
     assert sample["next_frame"].shape == (1, H, W)
     assert sample["action"].shape     == (2,)
     assert sample["frame"].dtype      == torch.float32
-    assert set(torch.unique(sample["frame"]).tolist()) <= {0.0, 1.0}
+    # binary datasets are {0,1}; marker datasets are grayscale. Both live in [0,1].
+    fmin, fmax = sample["frame"].min().item(), sample["frame"].max().item()
+    assert 0.0 <= fmin and fmax <= 1.0, f"frame values out of [0,1]: [{fmin}, {fmax}]"
 
     # no last-frame of an episode used as frame_t
     with h5py.File(h5_path, "r") as f:

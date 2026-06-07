@@ -43,6 +43,18 @@ L = 0.12                                 # triangle length (altitude) in world u
 W = 0.06                                 # triangle base width in world units
 WORLD_BOUNDS = ((0.0, 1.0), (0.0, 1.0))  # ((x_min, x_max), (y_min, y_max))
 
+# --- Heading marker --------------------------------------------------------
+# Optional cue painted on the robot to break front/back visual symmetry, so
+# heading is unambiguous in pixels. "none" = the classic binary triangle.
+# "dot" = a bright disc near the nose, which makes the frame GRAYSCALE (body at
+# BODY_VALUE, dot at NOSE_VALUE). Like L/W this is baked into every frame, so a
+# change needs a fresh RUN + re-collection. Extend RENDER_MARKER for more cues.
+RENDER_MARKER = "none"   # "none" | "dot"
+BODY_VALUE    = 0.5      # triangle-body intensity when a marker is active
+NOSE_VALUE    = 1.0      # nose-dot intensity
+NOSE_RADIUS   = 0.03     # nose-dot radius in world units
+NOSE_OFFSET   = 0.5      # dot center as a fraction from centroid toward the apex
+
 # --- Data collection -------------------------------------------------------
 N_EPISODES = 5000
 MAX_STEPS  = 100

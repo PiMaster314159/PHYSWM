@@ -3,7 +3,9 @@
 
 # # Renderer
 # 
-# Binary occupancy grid renderer. Robot drawn as isosceles triangle (altitude `L`, base `W`) so heading is visually distinguishable.
+# Occupancy grid renderer. Robot drawn as isosceles triangle (altitude `L`, base `W`) so heading is visually distinguishable.
+# 
+# Optional heading marker (`RENDER_MARKER` in config) paints a cue on the robot to break front/back symmetry, turning the frame grayscale. `"none"` is the classic binary triangle; `"dot"` adds a bright nose disc. Extend the marker if-chain in `render_frame` for more cues (gradient, fin, ...).
 # 
 # Resolution-agnostic: computes world coords of each grid cell's center, tests inclusion via half-plane (sign-of-cross-product) test. No fixed pixel sprite.
 # 
@@ -24,7 +26,10 @@
 import numpy as np
 import numpy.typing as npt
 
-from config import L, W, WORLD_BOUNDS
+from config import (
+    L, W, WORLD_BOUNDS,
+    RENDER_MARKER, BODY_VALUE, NOSE_VALUE, NOSE_RADIUS, NOSE_OFFSET,
+)
 
 
 # ## Triangle in local coordinates
@@ -202,12 +207,27 @@ def render_frame(
     world_bounds: tuple = WORLD_BOUNDS,
     L: float = L,
     W: float = W,
+    marker: str = RENDER_MARKER,
+    body_value: float = BODY_VALUE,
+    nose_value: float = NOSE_VALUE,
+    nose_radius: float = NOSE_RADIUS,
+    nose_offset: float = NOSE_OFFSET,
     dtype: npt.DTypeLike = np.uint8,
 ) -> np.ndarray:
-    """Render the robot at `state` to a binary (grid_size x grid_size) frame.
+    """Render the robot at `state` to a (grid_size x grid_size) frame.
 
-    Cells whose centers fall inside the rotated/translated triangle are 1,
-    everything else is 0.
+    Cells whose centers fall inside the rotated/translated triangle make up the
+    body. With `marker="none"` this is the classic binary frame (body 1, else 0).
+
+    A marker paints a heading cue on the robot to break its front/back symmetry,
+    making the frame grayscale. Markers (extend the if-chain to add more):
+
+      "none"  binary triangle, no cue.
+      "dot"   body at `body_value`, plus a bright disc of radius `nose_radius`
+              near the nose (`nose_value`). The dot center sits `nose_offset` of
+              the way from the centroid to the apex, in the body frame, so it
+              rotates with the robot. A high-contrast front blob the encoder
+              cannot miss, the cheapest fix for heading aliasing.
 
     Parameters
     ----------
@@ -219,13 +239,21 @@ def render_frame(
         World extents.
     L, W : float
         Triangle length and base width in world units.
+    marker : {"none", "dot"}
+        Heading cue. Default from config (RENDER_MARKER).
+    body_value, nose_value : float
+        Grayscale intensities for the body and the nose dot (marker != "none").
+    nose_radius : float
+        Nose-dot radius in world units.
+    nose_offset : float
+        Dot center as a fraction from centroid (0) to apex (1), along heading.
     dtype : dtype-like
-        Output array dtype (default uint8).
+        Output dtype for the binary case. Grayscale markers always return float32.
 
     Returns
     -------
     np.ndarray, shape (grid_size, grid_size)
-        Binary occupancy frame.
+        Binary frame (marker="none") or grayscale frame (marker set).
     """
     state = _as_state(state)
 
@@ -234,7 +262,19 @@ def render_frame(
     centers_local = world_to_triangle_coords(centers_world, state)
 
     inside = points_in_triangle(centers_local, triangle_local)
-    return inside.astype(dtype)
+    if marker == "none":
+        return inside.astype(dtype)
+
+    # grayscale: body at body_value, then overlay the (brighter) marker
+    frame = inside.astype(np.float32) * body_value
+    if marker == "dot":
+        apex_x = 2.0 * L / 3.0                      # apex local x after centroid recenter
+        cx     = nose_offset * apex_x               # dot center along the heading axis
+        d2     = (centers_local[..., 0] - cx) ** 2 + centers_local[..., 1] ** 2
+        frame[d2 <= nose_radius ** 2] = nose_value  # disc, rotates with the body frame
+    else:
+        raise ValueError(f"unknown marker {marker!r} (expected 'none' or 'dot')")
+    return frame.astype(np.float32)
 
 
 # ## Vertices in world coordinates
@@ -276,7 +316,7 @@ def triangle_world_vertices(state: npt.ArrayLike, L: float = L, W: float = W) ->
 # 
 # Sanity tests for the renderer.
 
-# In[15]:
+# In[ ]:
 
 
 def _test_renderer():
@@ -294,6 +334,23 @@ def _test_renderer():
 
     verts = triangle_world_vertices(state)
     assert verts.shape == (3, 2), f"Unexpected vertex shape: {verts.shape}"
+
+    # Nose-dot marker: grayscale, three intensity levels, asymmetric front/back.
+    gray = render_frame(state, grid_size=64, marker="dot")
+    assert gray.dtype == np.float32, "marker frame should be float32"
+    levels = set(np.unique(gray).tolist())
+    assert levels == {0.0, BODY_VALUE, NOSE_VALUE}, f"unexpected levels: {levels}"
+    assert (gray == NOSE_VALUE).sum() > 0, "nose dot rendered with zero pixels"
+    # the dot sits at the nose, so a 180-flip moves bright mass to the far side
+    back = render_frame([0.5, 0.5, np.pi], grid_size=64, marker="dot")
+    assert not np.array_equal(gray, back), "marker did not break front/back symmetry"
+
+    try:
+        render_frame(state, marker="banana")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for unknown marker")
 
     print("All renderer tests passed.")
 

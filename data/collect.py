@@ -40,7 +40,7 @@ from typing import Optional, Union
 
 from config import (
     DT, WORLD_BOUNDS, V_MEAN, V_STD, OMEGA_MEAN, OMEGA_STD,
-    GRID_SIZE, HOLD_K, MAX_STEPS, N_EPISODES, SEED,
+    GRID_SIZE, HOLD_K, MAX_STEPS, N_EPISODES, SEED, RENDER_MARKER,
 )
 from sim.render import render_frame
 from sim.environment import env_step, bounding_radius
@@ -164,7 +164,7 @@ def sample_initial_state(
 # 
 # `hold_k` holds each sampled action constant for K steps before resampling. Default 1 resamples every step; 4-5 gives visibly smoother arcs.
 
-# In[20]:
+# In[ ]:
 
 
 def run_episode(
@@ -178,6 +178,7 @@ def run_episode(
     v_std: float = V_STD,
     omega_mean: float = OMEGA_MEAN,
     omega_std: float = OMEGA_STD,
+    marker: str = RENDER_MARKER,
 ) -> tuple:
     """Run one random-action episode.
 
@@ -207,10 +208,13 @@ def run_episode(
         Hold each sampled action for K steps before resampling. Default 1.
     v_mean, v_std, omega_mean, omega_std : float
         Action-sampling distribution.
+    marker : {"none", "dot"}
+        Heading cue passed to render_frame. "none" -> binary uint8 frames;
+        anything else -> grayscale float32 frames.
 
     Returns
     -------
-    frames : np.ndarray, shape (L, grid_size, grid_size), uint8
+    frames : np.ndarray, shape (L, grid_size, grid_size); uint8 if marker="none", else float32
     states : np.ndarray, shape (L, 3), float32
     actions : np.ndarray, shape (L, 2), float32
     termination : {"wall", "timeout"}
@@ -220,9 +224,14 @@ def run_episode(
     if hold_k < 1:
         raise ValueError(f"hold_k must be >= 1, got {hold_k}")
 
+    frame_dtype = np.uint8 if marker == "none" else np.float32
+
+    def _render(s):
+        return render_frame(s, grid_size=grid_size, marker=marker).astype(frame_dtype)
+
     state = sample_initial_state(rng, world_bounds=world_bounds)
     states = [state]
-    frames = [render_frame(state, grid_size=grid_size).astype(np.uint8)]
+    frames = [_render(state)]
     actions = []
     termination = "timeout"
 
@@ -242,14 +251,14 @@ def run_episode(
             break
         state = next_state
         states.append(state)
-        frames.append(render_frame(state, grid_size=grid_size).astype(np.uint8))
+        frames.append(_render(state))
 
     # Timeout case: pad one unused action so all three arrays have length L.
     if len(actions) < len(states):
         actions.append(sample_action(rng, v_mean, v_std, omega_mean, omega_std))
 
     return (
-        np.asarray(frames, dtype=np.uint8),
+        np.asarray(frames, dtype=frame_dtype),
         np.asarray(states, dtype=np.float32),
         np.asarray(actions, dtype=np.float32),
         termination,
@@ -320,6 +329,7 @@ def collect_dataset(
     omega_std: float = OMEGA_STD,
     min_length: int = 10,
     seed: int = SEED,
+    marker: str = RENDER_MARKER,
     progress_every: int = 100,
 ) -> None:
     """Stream `n_episodes` random-action episodes to an HDF5 file.
@@ -336,21 +346,24 @@ def collect_dataset(
         Episodes with `len(states) < min_length` are dropped.
     seed : int
         Seeds the `np.random.default_rng` used for everything.
+    marker : {"none", "dot"}
+        Heading cue baked into every frame. "none" stores binary uint8 frames;
+        a marker stores grayscale float32 frames. Default from config.
     progress_every : int
         Print a progress line every N attempted episodes.
 
-    n_episodes, max_steps, grid_size, hold_k, seed default from config.py.
+    n_episodes, max_steps, grid_size, hold_k, seed, marker default from config.py.
 
     Notes
     -----
     Stored at the top level of the HDF5 file:
-      frames           (T, H, W) uint8   gzip-compressed
+      frames           (T, H, W) uint8 (binary) or float32 (marker)  gzip-compressed
       states           (T, 3)    float32
       actions          (T, 2)    float32
       episode_starts   (E,)      int64   index into the flat arrays
       episode_lengths  (E,)      int64
       termination      (E,)      uint8   0=wall, 1=timeout
-    Plus the generative parameters as `.attrs`.
+    Plus the generative parameters as `.attrs` (including render_marker).
     """
     if n_episodes < 1:
         raise ValueError(f"n_episodes must be >= 1, got {n_episodes}")
@@ -361,12 +374,14 @@ def collect_dataset(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    frames_dtype = "uint8" if marker == "none" else "float32"
+
     with h5py.File(path, "w") as f:
         frames_ds = f.create_dataset(
             "frames",
             shape=(0, grid_size, grid_size),
             maxshape=(None, grid_size, grid_size),
-            dtype="uint8",
+            dtype=frames_dtype,
             chunks=(64, grid_size, grid_size),
             compression="gzip",
         )
@@ -392,6 +407,7 @@ def collect_dataset(
                 world_bounds=world_bounds, dt=dt, hold_k=hold_k,
                 v_mean=v_mean, v_std=v_std,
                 omega_mean=omega_mean, omega_std=omega_std,
+                marker=marker,
             )
             if len(states) < min_length:
                 continue
@@ -422,6 +438,7 @@ def collect_dataset(
         f.attrs["max_steps"] = max_steps
         f.attrs["min_length"] = min_length
         f.attrs["seed"] = seed
+        f.attrs["render_marker"] = marker
         f.attrs["v_mean"] = v_mean
         f.attrs["v_std"] = v_std
         f.attrs["omega_mean"] = omega_mean
