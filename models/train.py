@@ -22,7 +22,7 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").ex
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from config import DATA_PATH, CKPT_PATH, LR, LAM, EPOCHS
+from config import DATA_PATH, CKPT_PATH, LR, LAM, LAM_PHYS, EPOCHS
 
 
 # ## Imports
@@ -115,6 +115,7 @@ def train_jepa(
     epochs: int = EPOCHS,
     lr: float = LR,
     lam: float = LAM,
+    lam_phys: float = LAM_PHYS,
     device: Optional[str] = None,
     log_every: int = 50,
     max_batches: Optional[int] = None,
@@ -133,6 +134,9 @@ def train_jepa(
     lam : float
         SIGReg weight. With B-scaled SIGReg, lam=0.01 keeps pred and sigreg
         on comparable scales. Tune after inspecting the first training curves.
+    lam_phys : float
+        Physics-consistency weight (physics mode only). Pulls the encoded next
+        pose toward the kinematic prediction. 0 disables it. Default from config.
     device : str, optional
         Defaults to cuda if available, else cpu.
     log_every : int
@@ -145,7 +149,7 @@ def train_jepa(
         Save the lowest-val-pred checkpoint here. Usually the one you want,
         since this task tends to peak early and then degrade.
 
-    epochs, lr, lam default from config.py.
+    epochs, lr, lam, lam_phys default from config.py.
 
     Returns
     -------
@@ -169,7 +173,7 @@ def train_jepa(
                 batch["action"].to(device),
                 batch["next_frame"].to(device),
             )
-            loss, parts = jepa_loss(out, lam=lam)
+            loss, parts = jepa_loss(out, lam=lam, lam_phys=lam_phys)
 
             opt.zero_grad()
             loss.backward()
@@ -180,8 +184,9 @@ def train_jepa(
                 parts["step"]       = step
                 parts["latent_std"] = out["z"].std(dim=0).mean().item()
                 history["train"].append(parts)
+                phys_str = f"  phys {parts['phys']:.4f}" if "phys" in parts else ""
                 print(f"  step {step:5d}  total {parts['total']:.4f}  "
-                      f"pred {parts['pred']:.4f}  sigreg {parts['sigreg']:.4f}  "
+                      f"pred {parts['pred']:.4f}  sigreg {parts['sigreg']:.4f}{phys_str}  "
                       f"latent_std {parts['latent_std']:.3f}")
 
         if val_dl is not None:

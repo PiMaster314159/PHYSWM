@@ -63,10 +63,12 @@ ENCODER_CHANNELS = (32, 64, 128)   # output channels per stride-2 conv stage
 PREDICTOR_HIDDEN = 256
 ACTION_DIM       = 2               # (v, omega)
 PREDICTOR_MODE   = "residual"      # "mlp" | "residual" | "physics"
+PHYSICS_LOCK_POSE = False          # physics mode: if True, the MLP cannot correct dims 0,1,2 (pose is pure kinematics)
 
 # --- Training --------------------------------------------------------------
 LR         = 1e-3
 LAM        = 0.005   # SIGReg weight
+LAM_PHYS   = 0.0     # physics-consistency loss weight (physics mode only; pulls encoded next pose toward the kinematic prediction)
 EPOCHS     = 10
 BATCH_SIZE = 256
 
@@ -75,7 +77,10 @@ BATCH_SIZE = 256
 # the knobs that define a model run, so you never hand-rename folders and the
 # name is self-describing. NOTE is an optional manual label for one-offs (e.g.
 # a learning-rate sweep): set NOTE = "lr2e3" and it gets appended.
-TAG        = f"{PREDICTOR_MODE}_s{PRED_STEP}_e{EPOCHS}"   # e.g. "physics_s4_e10"
+TAG = f"{PREDICTOR_MODE}_s{PRED_STEP}_e{EPOCHS}"          # e.g. "physics_s4_e10"
+if PREDICTOR_MODE == "physics":
+    if LAM_PHYS > 0:       TAG += f"_lp{LAM_PHYS:g}"      # e.g. "..._lp1" for the loss-term sweep
+    if PHYSICS_LOCK_POSE:  TAG += "_lock"                 # the hard architectural variant
 NOTE       = ""
 EXPERIMENT = f"{RUN}_{TAG}" + (f"_{NOTE}" if NOTE else "")
 

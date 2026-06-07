@@ -29,7 +29,7 @@ if str(ROOT) not in sys.path:
 from config import (
     DATA_PATH, DT, PRED_STEP,
     GRID_SIZE, IN_CHANNELS, LATENT_DIM, ENCODER_CHANNELS,
-    PREDICTOR_HIDDEN, ACTION_DIM, PREDICTOR_MODE,
+    PREDICTOR_HIDDEN, ACTION_DIM, PREDICTOR_MODE, PHYSICS_LOCK_POSE, LAM_PHYS,
 )
 
 
@@ -140,42 +140,32 @@ class Encoder(nn.Module):
 class Predictor(nn.Module):
     """Predicts the next latent as base(z, a) + a learned MLP correction.
 
-    The `mode` selects the base, the only difference between the three variants:
-
+    The `mode` selects the base:
       "mlp"      base = 0       predict the next latent from scratch
       "residual" base = z       predict the change; identity default
       "physics"  base = z + a learnable-scaled unicycle step on dims 0, 1, 2
 
-    The physics base reads dims 0, 1, 2 as (x, y, theta):
-
+    Physics base (dims 0, 1, 2 read as x, y, theta), no ground-truth leak:
         theta = a_theta * z2
         z0_next = z0 + a_pos * dt * v * cos(theta)
         z1_next = z1 + a_pos * dt * v * sin(theta)
         z2_next = z2 + (dt * omega) / a_theta
+    a_pos, a_theta are learnable scalars (log-space, =1 at init) bridging latent
+    units (BatchNorm unit-variance) and physical units (world units / radians).
 
-    using only the latent's own values and the action (no ground-truth state
-    leaks in). a_pos and a_theta are learnable scalars (kept in log-space so they
-    stay positive; both start at 1). They bridge latent units and physical units:
-    BatchNorm forces unit-variance latents, but the kinematics want z0,z1 in world
-    units and z2 in radians. a_pos amplifies the tiny physical step (dt*v ~ 0.018)
-    to a latent-scale change; a_theta lets z2 sit at unit variance yet be read as a
-    true heading. Without them the kinematic term is a ~2% nudge on identity and
-    barely shapes anything. To make the base accurate the encoder must put a
-    faithful heading in z2, which is the pressure the plain objective lacks.
+    lock_pose (physics only): if True, the MLP cannot correct dims 0, 1, 2, so
+    the predicted pose is *purely* the kinematics. This is the hard architectural
+    prior: the prediction loss can only be minimized if the encoder puts a
+    faithful pose in dims 0-2, since the MLP is no longer allowed to paper over it.
 
     Parameters
     ----------
-    latent_dim : int
-    action_dim : int
-        Raw action size. 2 for (v, omega).
-    hidden : int
-        MLP hidden width.
+    latent_dim, action_dim, hidden : ints.
     mode : {"mlp", "residual", "physics"}
-        Which base to add the learned correction to.
     dt : float
-        Timestep for the physics base. Defaults to PRED_STEP * DT, so a multi-step
-        transition integrates over its full horizon (a single Euler step of that
-        size; the learned MLP corrects the approximation).
+        Physics timestep. Defaults to PRED_STEP * DT (multi-step horizon).
+    lock_pose : bool
+        Physics only. Mask the MLP off dims 0, 1, 2.
 
     Defaults pull from config.py.
     """
@@ -187,6 +177,7 @@ class Predictor(nn.Module):
         hidden: int = PREDICTOR_HIDDEN,
         mode: str = PREDICTOR_MODE,
         dt: float = PRED_STEP * DT,
+        lock_pose: bool = PHYSICS_LOCK_POSE,
     ):
         super().__init__()
         if mode not in ("mlp", "residual", "physics"):
@@ -202,10 +193,15 @@ class Predictor(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(hidden, latent_dim),
         )
+        self.lock_pose = (mode == "physics" and lock_pose)
         if mode == "physics":
             # learnable unit-bridging scales, log-space so they stay positive (=1 at init)
             self.log_a_pos   = nn.Parameter(torch.zeros(()))
             self.log_a_theta = nn.Parameter(torch.zeros(()))
+            if self.lock_pose:
+                mask = torch.ones(latent_dim)
+                mask[:3] = 0.0                       # MLP zeroed on the pose dims
+                self.register_buffer("_pose_mask", mask)
 
     def _physics_base(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         """z + learnable-scaled unicycle step on dims 0,1,2 (read as x, y, theta)."""
@@ -228,6 +224,8 @@ class Predictor(nn.Module):
             return learned
         if self.mode == "residual":
             return z + learned
+        if self.lock_pose:
+            learned = learned * self._pose_mask   # pose dims governed purely by kinematics
         return self._physics_base(z, action) + learned
 
 
@@ -255,6 +253,8 @@ class JEPA(nn.Module):
         Predictor MLP hidden width.
     predictor_mode : {"mlp", "residual", "physics"}
         Predictor base. See Predictor.
+    predictor_lock_pose : bool
+        Physics only. Lock dims 0,1,2 to pure kinematics (no MLP correction).
 
     Defaults pull from config.py.
     """
@@ -266,6 +266,7 @@ class JEPA(nn.Module):
         encoder_channels: tuple = ENCODER_CHANNELS,
         predictor_hidden: int = PREDICTOR_HIDDEN,
         predictor_mode: str = PREDICTOR_MODE,
+        predictor_lock_pose: bool = PHYSICS_LOCK_POSE,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -279,6 +280,7 @@ class JEPA(nn.Module):
             action_dim=ACTION_DIM,
             hidden=predictor_hidden,
             mode=predictor_mode,
+            lock_pose=predictor_lock_pose,
         )
 
     def encode(self, frame: torch.Tensor) -> torch.Tensor:
@@ -303,20 +305,27 @@ class JEPA(nn.Module):
             z : (B, D)  encoding of frame_t
             pred_next_z : (B, D)  predictor forecast of z_{t+1}
             target_next_z : (B, D)  encoder output for next frame
+            phys_next_z : (B, D)  physics-mode only: kinematic step of z (for the
+                                  physics-consistency loss)
         """
         z             = self.encode(frame)
         pred_next_z   = self.predict(z, action)
         target_next_z = self.encode(next_frame)
-        return {"z": z, "pred_next_z": pred_next_z, "target_next_z": target_next_z}
+        out = {"z": z, "pred_next_z": pred_next_z, "target_next_z": target_next_z}
+        if self.predictor.mode == "physics":
+            out["phys_next_z"] = self.predictor._physics_base(z, action)
+        return out
 
 
 # ## Loss
 # 
-# Two terms, following the LeWM paper exactly.
+# Three terms (the third only in physics mode).
 # 
-# **Prediction loss**: MSE between the predicted next latent and the encoded next frame. Stop-gradient on the target prevents both ends of the shared encoder collapsing to the same constant and trivially zeroing the loss.
+# **Prediction loss**: MSE between the predicted next latent and the encoded next frame. Stop-gradient on the target prevents both ends of the shared encoder collapsing to a constant.
 # 
-# **SIGReg**: the Sketched-Isotropic-Gaussian Regularizer. Projects the batch of latents onto M random unit directions, then applies the univariate Epps-Pulley (EP) normality test to each projection. By the Cramer-Wold theorem, matching all 1D projections to N(0,1) implies the full joint distribution matches N(0, I). This is a provable anti-collapse guarantee.
+# **SIGReg**: the Sketched-Isotropic-Gaussian Regularizer. Projects the latents onto random unit directions and applies the Epps-Pulley normality test; by Cramer-Wold, matching all 1D marginals to N(0,1) matches the joint to N(0, I). Provable anti-collapse.
+# 
+# **Physics consistency** (`lam_phys > 0`, physics mode): pulls the encoded *next* pose (`target_next_z` dims 0,1,2) toward the kinematic step of the *current* latent (`phys_next_z` dims 0,1,2). Minimizing it requires the next-frame encoding's position to equal `z + dt·v·cos(z2)...`, which requires `z2` to be a real heading. This is the soft version of the architectural pose lock, and the weight is the "physics ratio" you can crank.
 
 # In[ ]:
 
@@ -371,25 +380,37 @@ def sigreg_loss(
     return T_stat.mean()
 
 
-def jepa_loss(out: dict, lam: float = 1.0) -> tuple:
-    """LeWM training loss: prediction MSE + SIGReg.
+def jepa_loss(out: dict, lam: float = 1.0, lam_phys: float = 0.0) -> tuple:
+    """LeWM training loss: prediction MSE + SIGReg (+ optional physics consistency).
 
     Parameters
     ----------
     out : dict
-        Output of JEPA.forward(). Keys: z, pred_next_z, target_next_z.
+        Output of JEPA.forward(). Keys: z, pred_next_z, target_next_z, and (in
+        physics mode) phys_next_z.
     lam : float
-        Weight on SIGReg. Lambda in the paper.
+        Weight on SIGReg.
+    lam_phys : float
+        Weight on the physics-consistency term. Only active when > 0 and the
+        model is in physics mode (out has phys_next_z). Pulls the encoded next
+        pose (dims 0,1,2) toward the kinematic step of the current latent.
 
     Returns
     -------
     total : scalar loss with grad
-    parts : dict with float entries pred, sigreg, total (detached, for logging)
+    parts : dict of float parts for logging (pred, sigreg, phys, total)
     """
     pred  = F.mse_loss(out["pred_next_z"], out["target_next_z"].detach())
     sig   = sigreg_loss(out["z"])
     total = pred + lam * sig
-    parts = {"pred": pred.item(), "sigreg": sig.item(), "total": total.item()}
+    parts = {"pred": pred.item(), "sigreg": sig.item()}
+
+    if lam_phys > 0 and "phys_next_z" in out:
+        phys = F.mse_loss(out["phys_next_z"][:, :3], out["target_next_z"][:, :3].detach())
+        total = total + lam_phys * phys
+        parts["phys"] = phys.item()
+
+    parts["total"] = total.item()
     return total, parts
 
 
@@ -443,6 +464,17 @@ def _test_jepa():
             assert mm.predictor.log_a_pos.grad   is not None, "a_pos got no gradient"
             assert mm.predictor.log_a_theta.grad is not None, "a_theta got no gradient"
     print("predictor modes mlp/residual/physics build + run OK (physics scales trainable)")
+
+    # physics: pose lock + consistency loss
+    locked = JEPA(grid_size=40, latent_dim=D, predictor_mode="physics", predictor_lock_pose=True)
+    o = locked(frame, action, next_frame)
+    assert "phys_next_z" in o, "physics forward should expose phys_next_z"
+    # locked: predicted pose dims equal the pure kinematic base (MLP masked off 0,1,2)
+    assert torch.allclose(o["pred_next_z"][:, :3], o["phys_next_z"][:, :3], atol=1e-5), \
+        "lock_pose leaked MLP into the pose dims"
+    lp, parts = jepa_loss(o, lam_phys=1.0)
+    assert "phys" in parts and torch.isfinite(lp), "physics-consistency term failed"
+    print(f"physics lock_pose + lam_phys OK  (phys={parts['phys']:.4f})")
 
     # action sensitivity: different action -> different prediction
     z  = model.encode(frame)

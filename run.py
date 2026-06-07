@@ -2,6 +2,8 @@
 
     python run.py                                   # all defaults from config.py
     python run.py --predictor-mode physics --pred-step 4
+    python run.py --predictor-mode physics --lam-phys 1.0      # soft physics prior
+    python run.py --predictor-mode physics --lock-pose         # hard architectural prior
     python run.py --run run02_64x64 --grid-size 64 --epochs 10
 
 Each invocation: collects the dataset if missing, trains, probes (saves the
@@ -50,6 +52,11 @@ def parse_args():
                    choices=["mlp", "residual", "physics"])
     p.add_argument("--pred-step", type=int, default=C.PRED_STEP)
     p.add_argument("--latent-dim", type=int, default=C.LATENT_DIM)
+    # physics prior (physics mode only)
+    p.add_argument("--lam-phys", type=float, default=C.LAM_PHYS,
+                   help="physics-consistency loss weight (the soft prior)")
+    p.add_argument("--lock-pose", action="store_true", default=C.PHYSICS_LOCK_POSE,
+                   help="hard architectural prior: MLP cannot touch dims 0,1,2")
     # training
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
@@ -65,7 +72,8 @@ def parse_args():
 
 def build_model(a) -> JEPA:
     """A JEPA in the requested mode, with the physics dt matched to the horizon."""
-    m = JEPA(grid_size=a.grid_size, latent_dim=a.latent_dim, predictor_mode=a.predictor_mode)
+    m = JEPA(grid_size=a.grid_size, latent_dim=a.latent_dim,
+             predictor_mode=a.predictor_mode, predictor_lock_pose=a.lock_pose)
     m.predictor.dt = a.pred_step * C.DT   # physics integrates over the full horizon; no-op for mlp/residual
     return m
 
@@ -74,7 +82,10 @@ def main():
     a = parse_args()
 
     # derive experiment identity from the chosen knobs (mirrors config.py)
-    tag        = f"{a.predictor_mode}_s{a.pred_step}_e{a.epochs}"
+    tag = f"{a.predictor_mode}_s{a.pred_step}_e{a.epochs}"
+    if a.predictor_mode == "physics":
+        if a.lam_phys > 0:  tag += f"_lp{a.lam_phys:g}"
+        if a.lock_pose:     tag += "_lock"
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
     ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
@@ -82,7 +93,8 @@ def main():
     report_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"=== {experiment} ===")
-    print(f"device={a.device}  data={data_path.name}  step={a.pred_step}  mode={a.predictor_mode}")
+    phys_str = f"  lam_phys={a.lam_phys:g}  lock_pose={a.lock_pose}" if a.predictor_mode == "physics" else ""
+    print(f"device={a.device}  data={data_path.name}  step={a.pred_step}  mode={a.predictor_mode}{phys_str}")
 
     # collect the dataset if it does not exist yet
     if not data_path.exists():
@@ -93,7 +105,7 @@ def main():
     train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED, step=a.pred_step)
     model = build_model(a)
     history = train_jepa(model, train_dl, val_dl, epochs=a.epochs, lr=a.lr, lam=a.lam,
-                         device=a.device, save_best_to=ckpt_path)
+                         lam_phys=a.lam_phys, device=a.device, save_best_to=ckpt_path)
     plot_history(history, save_to=report_dir / "training_curve.png")
 
     # reload the best-val checkpoint into a fresh model of the SAME mode (so the
