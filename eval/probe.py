@@ -212,6 +212,10 @@ def evaluate_probe(
     dict with keys:
         x_rmse, y_rmse, pos_rmse : world units (arena is [0, 1]^2)
         theta_mae_deg, theta_median_deg : mean/median wrapped heading error in degrees
+        theta_flip_pct : percent of frames with heading error > 90 deg, the
+            front/back aliasing tail. Chance is 50%; a solved heading is near 0.
+            Separates the median (typical accuracy) from the tail (how often the
+            encoder gets heading fully backwards), which MAE alone conflates.
         x_r2, y_r2 : coefficient of determination (1.0 is perfect, 0.0 is chance)
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -232,6 +236,7 @@ def evaluate_probe(
         "pos_rmse":         err_xy.pow(2).sum(1).mean().sqrt().item(),
         "theta_mae_deg":    (ang.mean()   * deg).item(),
         "theta_median_deg": (ang.median() * deg).item(),
+        "theta_flip_pct":   (ang > (torch.pi / 2)).float().mean().item() * 100.0,
         "x_r2":             r2(pred_states[:, 0], states[:, 0]),
         "y_r2":             r2(pred_states[:, 1], states[:, 1]),
     }
@@ -251,7 +256,8 @@ def chance_baseline(
     """Metrics for a probe that always predicts the training mean position.
 
     Heading chance level is 90 degrees: the expected wrapped absolute error
-    of a uniformly random angle is pi/2 radians = 90 degrees.
+    of a uniformly random angle is pi/2 radians = 90 degrees. The flip tail at
+    chance is 50% (a random angle is > 90 deg off half the time).
     """
     mean_xy = states_tr[:, :2].mean(dim=0)
     err_xy  = mean_xy.unsqueeze(0) - states_val[:, :2]
@@ -261,6 +267,7 @@ def chance_baseline(
         "pos_rmse":         err_xy.pow(2).sum(1).mean().sqrt().item(),
         "theta_mae_deg":    90.0,
         "theta_median_deg": 90.0,
+        "theta_flip_pct":   50.0,
         "x_r2":             0.0,
         "y_r2":             0.0,
     }
@@ -276,7 +283,7 @@ def chance_baseline(
 def _print_table(results: dict) -> None:
     """Print a comparison table of chance, linear, and MLP probe metrics."""
     cols = ["pos_rmse", "x_rmse", "y_rmse", "theta_mae_deg", "theta_median_deg",
-            "x_r2", "y_r2"]
+            "theta_flip_pct", "x_r2", "y_r2"]
     head = "probe      " + "".join(f"{c:>17s}" for c in cols)
     print(head)
     print("-" * len(head))
@@ -301,7 +308,7 @@ def save_probe_table(results: dict, path: Union[str, Path]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     cols = ["pos_rmse", "x_rmse", "y_rmse", "theta_mae_deg", "theta_median_deg",
-            "x_r2", "y_r2"]
+            "theta_flip_pct", "x_r2", "y_r2"]
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["probe"] + cols)
