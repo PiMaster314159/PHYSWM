@@ -77,6 +77,18 @@ ACTION_DIM       = 2               # (v, omega)
 PREDICTOR_MODE   = "residual"      # "mlp" | "residual" | "physics"
 PHYSICS_LOCK_POSE = False          # physics mode: if True, the MLP cannot correct dims 0,1,2 (pose is pure kinematics)
 
+# --- Grounded physics block (models/grounded.py) ---------------------------
+# A separate, interpretable latent block holding [x, y, cos th, sin th]. It has
+# its own raw linear head (NO BatchNorm) and is EXEMPT from SIGReg, so it can
+# hold real-scale state instead of being smeared isotropic. The known kinematics
+# run on it; the rest of the latent is the usual SIGReg'd free block.
+# Grounding is label-free: the locked kinematic prediction + the prediction loss
+# force the block to track true pose (no state supervision). See grounded.py.
+PHYSICS_BLOCK_DIM      = 4       # dims 0..3 = x, y, cos th, sin th
+GROUNDED_LOCK_BLOCK    = True    # True: block evolves by pure kinematics (no MLP). False: gray-box.
+GROUNDED_BLOCK_BUDGET  = 0.0     # gray-box only (lock=False): max scale of the learned block correction
+LAM_RECON              = 0.0     # optional decoder: reconstruct frame from the block alone (0 = off)
+
 # --- Training --------------------------------------------------------------
 LR         = 1e-3
 LAM        = 0.005   # SIGReg weight
