@@ -34,7 +34,7 @@ def make_spin_dataset(
     path: Path,
     marker: str,
     grid_size: int,
-    n_episodes: int = 500,
+    n_episodes: int = 20000,
     steps_per_ep: int = 24,
     seed: int = 0,
     center_lo: float = 0.35,
