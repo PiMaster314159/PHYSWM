@@ -89,6 +89,7 @@ def parse_args():
     p.add_argument("--lam-dyn",  type=float, default=1.0, help="state-space dynamics-consistency weight")
     p.add_argument("--lam-pred", type=float, default=1.0, help="predicted-state -> next-frame reconstruction weight")
     p.add_argument("--residual-budget", type=float, default=0.0, help="gray-box: bounded learned dynamics correction (0 = pure kinematics)")
+    p.add_argument("--learn-coeffs", action="store_true", help="learn a_v/a_omega (gray-box); default frozen at the known values (=1) so they can't collapse")
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
     p.add_argument("--batch-size", type=int, default=C.BATCH_SIZE)
@@ -129,10 +130,11 @@ def main():
     torch.manual_seed(C.SEED)
     train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED, step=a.pred_step)
     model = EgoWorldModel(grid_size=a.grid_size, dt=a.pred_step * C.DT,
-                          residual_budget=a.residual_budget).to(a.device).train()
+                          residual_budget=a.residual_budget, learn_coeffs=a.learn_coeffs).to(a.device).train()
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
 
     best, step = float("inf"), 0
+    train_hist, val_hist = [], []
     for epoch in range(a.epochs):
         for b in train_dl:
             frame, nxt = b["frame"].to(a.device), b["next_frame"].to(a.device)
@@ -143,16 +145,31 @@ def main():
             opt.step(); step += 1
             if step % 50 == 0:
                 st_std = out["s"].std(0).mean().item()
+                row = {"step": step, "epoch": epoch + 1, **parts,
+                       "a_v": model.log_a_v.exp().item(), "a_omega": model.log_a_omega.exp().item(),
+                       "state_std": st_std}
+                train_hist.append(row)
                 print(f"  step {step:5d}  total {parts['total']:.4f}  recon {parts['recon']:.4f}  "
                       f"dyn {parts['dyn']:.4f}  pred_recon {parts['pred_recon']:.4f}  "
-                      f"a_v {model.log_a_v.exp().item():.3f}  a_omega {model.log_a_omega.exp().item():.3f}  "
-                      f"state_std {st_std:.3f}")
+                      f"a_v {row['a_v']:.3f}  a_omega {row['a_omega']:.3f}  state_std {st_std:.3f}")
         v = val_total(model, val_dl, a.device, a)
+        val_hist.append({"epoch": epoch + 1, "step": step, "val_total": v})
         print(f"epoch {epoch+1}/{a.epochs}  val total {v:.4f}")
         if v < best:
             best = v
             torch.save(model.state_dict(), ckpt_path)
             print(f"  new best {best:.4f} -> {ckpt_path}")
+
+    # history CSVs (so the long logs are readable as data)
+    def _write_csv(path, rows, cols):
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f); w.writerow(cols)
+            for r in rows:
+                w.writerow([r[c] for c in cols])
+    _write_csv(report_dir / "train_history.csv", train_hist,
+               ["step", "epoch", "total", "recon", "dyn", "pred_recon", "a_v", "a_omega", "state_std"])
+    _write_csv(report_dir / "val_history.csv", val_hist, ["epoch", "step", "val_total"])
+    print(f"wrote train_history.csv ({len(train_hist)} rows) + val_history.csv")
 
     model.load_state_dict(torch.load(ckpt_path, map_location=a.device, weights_only=True))
 
