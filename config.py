@@ -89,6 +89,7 @@ GROUNDED_LOCK_BLOCK    = True    # True: block evolves by pure kinematics (no ML
 GROUNDED_BLOCK_BUDGET  = 0.0     # gray-box only (lock=False): max scale of the learned block correction
 LAM_RECON              = 0.0     # optional decoder: reconstruct frame from the block alone (0 = off)
 RECON_FG_WEIGHT        = 0.0     # foreground weighting of recon. 0 = plain MSE. >0: recon = bg_mean + w*fg_mean, averaging error over background vs lit (triangle/nose) pixels SEPARATELY so the shape is not drowned by the ~99% black background; the decoder must then draw a sharp, correctly-oriented shape, forcing heading into the block.
+PRED_BLOCK_WEIGHT      = 1.0     # weight on the block dims in the prediction loss (pred = free_mean + w*block_mean). The block's prediction is the locked kinematics, so this is the physics-consistency strength. The block is 4/128 dims, so a plain MSE buries it; raise this to make the kinematics bite (the heading lever).
 
 # --- Training --------------------------------------------------------------
 LR         = 1e-3

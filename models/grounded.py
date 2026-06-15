@@ -241,23 +241,30 @@ class GroundedJEPA(nn.Module):
 
 
 def grounded_loss(out: dict, frame: torch.Tensor, block_dim: int = PHYSICS_BLOCK_DIM,
-                  lam: float = 0.005, lam_recon: float = 0.0, recon_fg_weight: float = 0.0) -> tuple:
-    """Prediction MSE (all dims) + SIGReg (FREE dims only) + optional recon.
+                  lam: float = 0.005, lam_recon: float = 0.0, recon_fg_weight: float = 0.0,
+                  pred_block_weight: float = 1.0) -> tuple:
+    """Prediction MSE + SIGReg (FREE dims only) + optional recon.
 
-    The block part of the prediction loss is the label-free physics-consistency
-    constraint (because the block forward is locked kinematics). SIGReg is applied
-    only to dims block_dim.. so the block is free to hold real-scale state.
+    The block part of the prediction loss IS the label-free physics-consistency
+    constraint (the block forward is locked kinematics): satisfying it requires the
+    encoder to put true pose in the block. But the block is only 4 of 128 dims, so
+    a plain all-dims MSE dilutes it to ~3% and the encoder ignores it. pred is
+    therefore split: free-dim mean + pred_block_weight * block-dim mean. Raise
+    pred_block_weight to give the kinematics teeth (this is the heading lever; the
+    decoder grounds position but not heading). SIGReg is applied only to the free
+    dims so the block can hold real-scale state.
 
-    recon_fg_weight > 0 makes the recon loss foreground-weighted: per-pixel weight
-    = 1 + recon_fg_weight * target. Plain MSE is dominated by the easy black
-    background and tolerates a blurry, orientation-agnostic blob; weighting by the
-    bright triangle/nose forces the decoder to draw a sharp, correctly-oriented
-    shape, which it can only do if heading is in the block.
+    recon_fg_weight > 0 makes recon foreground-weighted (bg_mean + w*fg_mean) so the
+    decoder must draw a sharp oriented shape rather than a blurry blob.
     """
-    pred  = F.mse_loss(out["pred_next_z"], out["target_next_z"].detach())
-    sig   = sigreg_loss(out["z"][:, block_dim:])
-    total = pred + lam * sig
-    parts = {"pred": pred.item(), "sigreg": sig.item()}
+    err2       = (out["pred_next_z"] - out["target_next_z"].detach()) ** 2
+    free_pred  = err2[:, block_dim:].mean()
+    block_pred = err2[:, :block_dim].mean()
+    pred       = free_pred + pred_block_weight * block_pred
+    sig        = sigreg_loss(out["z"][:, block_dim:])
+    total      = pred + lam * sig
+    parts = {"pred": pred.item(), "pred_block": block_pred.item(),
+             "pred_free": free_pred.item(), "sigreg": sig.item()}
 
     if lam_recon > 0 and "recon" in out:
         if recon_fg_weight > 0:

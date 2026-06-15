@@ -51,7 +51,9 @@ def parse_args():
     p.add_argument("--use-decoder", action="store_true", help="reconstruct frame from the block (grounding booster)")
     p.add_argument("--lam-recon", type=float, default=C.LAM_RECON, help="decoder reconstruction weight")
     p.add_argument("--recon-fg-weight", type=float, default=C.RECON_FG_WEIGHT,
-                   help="foreground weighting of recon (per-pixel weight = 1 + w*target); forces heading into the block")
+                   help="foreground weighting of recon (bg_mean + w*fg_mean); decoder lever (grounds position)")
+    p.add_argument("--pred-block-weight", type=float, default=C.PRED_BLOCK_WEIGHT,
+                   help="weight on block dims in the prediction loss; physics-consistency strength (the heading lever)")
     # training
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
@@ -84,6 +86,7 @@ def main():
     if not a.lock_block:   tag += f"_gray{a.block_budget:g}"
     if a.lam_recon > 0:    tag += f"_rec{a.lam_recon:g}"
     if a.recon_fg_weight > 0: tag += f"_fg{a.recon_fg_weight:g}"
+    if a.pred_block_weight != 1.0: tag += f"_pb{a.pred_block_weight:g}"
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
     ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
@@ -113,7 +116,8 @@ def main():
             frame = b["frame"].to(a.device)
             out   = model(frame, b["action"].to(a.device), b["next_frame"].to(a.device))
             loss, parts = grounded_loss(out, frame, block_dim=a.block_dim, lam=a.lam,
-                                        lam_recon=a.lam_recon, recon_fg_weight=a.recon_fg_weight)
+                                        lam_recon=a.lam_recon, recon_fg_weight=a.recon_fg_weight,
+                                        pred_block_weight=a.pred_block_weight)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)   # governor on the block feedback loop
@@ -125,7 +129,8 @@ def main():
                 free_std = z[:, a.block_dim:].std(0).mean().item()
                 rec = f" recon {parts['recon']:.4f}" if "recon" in parts else ""
                 print(f"  step {step:5d}  total {parts['total']:.4f}  pred {parts['pred']:.4f}  "
-                      f"sigreg {parts['sigreg']:.4f}{rec}  block_std {blk_std:.3f}  free_std {free_std:.3f}")
+                      f"pred_blk {parts['pred_block']:.4f}  sigreg {parts['sigreg']:.4f}{rec}  "
+                      f"block_std {blk_std:.3f}  free_std {free_std:.3f}")
 
         v = val_pred(model, val_dl, a.device)
         print(f"epoch {epoch+1}/{a.epochs}  val pred {v:.4f}")
