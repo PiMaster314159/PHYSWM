@@ -114,7 +114,11 @@ def val_total(model, dl, device, a, max_batches=50):
 
 def main():
     a = parse_args()
-    tag = f"ego_s{a.pred_step}_e{a.epochs}" + (f"_gray{a.residual_budget:g}" if a.residual_budget > 0 else "")
+    tag = f"ego_s{a.pred_step}_e{a.epochs}"
+    if a.lam_dyn != 1.0:       tag += f"_ld{a.lam_dyn:g}"      # so different weights -> different folders
+    if a.lam_pred != 1.0:      tag += f"_lp{a.lam_pred:g}"
+    if a.residual_budget > 0:  tag += f"_gray{a.residual_budget:g}"
+    if a.learn_coeffs:         tag += "_learn"
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
     ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
