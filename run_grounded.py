@@ -96,7 +96,7 @@ def main():
     model = GroundedJEPA(
         grid_size=a.grid_size, latent_dim=a.latent_dim, block_dim=a.block_dim,
         dt=a.pred_step * C.DT, lock_block=a.lock_block, block_budget=a.block_budget,
-        use_decoder=a.use_decoder,
+        use_decoder=(a.use_decoder or a.lam_recon > 0),   # decoder grounds the block; auto-on with lam_recon
     ).to(a.device).train()
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
 
@@ -109,6 +109,7 @@ def main():
             loss, parts = grounded_loss(out, frame, block_dim=a.block_dim, lam=a.lam, lam_recon=a.lam_recon)
             opt.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)   # governor on the block feedback loop
             opt.step()
             step += 1
             if step % 50 == 0:
@@ -127,7 +128,7 @@ def main():
             print(f"  new best val pred {best:.4f} -> {ckpt_path}")
 
     # reload best
-    model.load_state_dict(torch.load(ckpt_path, map_location=a.device))
+    model.load_state_dict(torch.load(ckpt_path, map_location=a.device, weights_only=True))
 
     # probe (reuses eval.probe; model-agnostic via .encode) and save the metrics table
     run_probe(model=model, data_path=data_path, latent_dim=a.latent_dim,

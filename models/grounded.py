@@ -64,6 +64,8 @@ class GroundedEncoder(nn.Module):
         super().__init__()
         if block_dim >= latent_dim:
             raise ValueError(f"block_dim {block_dim} must be < latent_dim {latent_dim}")
+        if block_dim != 4:
+            raise ValueError(f"block_dim must be 4 (x, y, cos, sin); got {block_dim}")
         self.block_dim = block_dim
         self.free_dim  = latent_dim - block_dim
 
@@ -84,17 +86,32 @@ class GroundedEncoder(nn.Module):
             nn.BatchNorm1d(self.free_dim),
         )
 
+    @staticmethod
+    def _constrain_block(raw: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        """Map the raw block head to valid physical units, by construction.
+
+        Position dims -> sigmoid -> [0,1] (the known arena bounds). Heading dims ->
+        safe unit-normalize -> the unit circle. This pins the block to real-scale
+        state (so the kinematics see the right magnitudes) and stops the block from
+        running away, the role BatchNorm used to play, without re-isotropizing it.
+        """
+        pos  = torch.sigmoid(raw[:, :2])                               # x, y in [0,1]
+        head = raw[:, 2:4]
+        head = head / torch.sqrt((head * head).sum(1, keepdim=True) + eps)   # -> unit circle, no blow-up at 0
+        return torch.cat([pos, head], dim=1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(B, 1, H, W) -> (B, latent_dim), block dims first."""
         if x.ndim != 4:
             raise ValueError(f"expected (B, C, H, W), got {tuple(x.shape)}")
         feat = self.conv(x).flatten(1)
-        return torch.cat([self.phys_head(feat), self.free_head(feat)], dim=1)
+        phys = self._constrain_block(self.phys_head(feat))
+        return torch.cat([phys, self.free_head(feat)], dim=1)
 
 
 # ## Predictor: kinematics on the block, residual MLP on the free dims
 
-def unicycle_step(block: torch.Tensor, action: torch.Tensor, dt: float, eps: float = 1e-4) -> torch.Tensor:
+def unicycle_step(block: torch.Tensor, action: torch.Tensor, dt: float, eps: float = 1e-6) -> torch.Tensor:
     """Advance a (B, 4) block [x, y, cos th, sin th] by one unicycle step.
 
     Semi-implicit Euler, matching sim/dynamics.py: rotate heading first, then move
@@ -104,7 +121,7 @@ def unicycle_step(block: torch.Tensor, action: torch.Tensor, dt: float, eps: flo
     """
     x, y   = block[:, 0:1], block[:, 1:2]
     c, s   = block[:, 2:3], block[:, 3:4]
-    n      = torch.sqrt(c * c + s * s) + eps          # defensive normalize of the input heading
+    n      = torch.clamp(torch.sqrt(c * c + s * s), min=eps)   # normalize input heading; clamp floors a near-zero norm without distorting unit vectors
     c, s   = c / n, s / n
     v      = action[:, 0:1]
     omega  = action[:, 1:2]
