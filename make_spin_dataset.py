@@ -25,7 +25,7 @@ if str(ROOT) not in sys.path:
 import numpy as np
 import h5py
 
-from config import DT, WORLD_BOUNDS, DATASETS_DIR
+from config import DT, WORLD_BOUNDS, DATASETS_DIR, NOSE_RADIUS
 from sim.render import render_frame
 from sim.dynamics import step
 
@@ -41,6 +41,7 @@ def make_spin_dataset(
     center_hi: float = 0.65,
     omega_min: float = 0.3,
     omega_max: float = float(np.pi / 2),
+    nose_radius: float = NOSE_RADIUS,
 ) -> None:
     """Generate one spin-in-place dataset.
 
@@ -81,7 +82,7 @@ def make_spin_dataset(
         s = np.array([cx, cy, theta], dtype=float)
         for _t in range(steps_per_ep):
             states.append(s.astype(np.float32))
-            frames.append(render_frame(s, grid_size=grid_size, marker=marker).astype(frame_dtype))
+            frames.append(render_frame(s, grid_size=grid_size, marker=marker, nose_radius=nose_radius).astype(frame_dtype))
             actions.append(action.copy())
             s = step(s, action, dt=DT)   # v=0 keeps (x, y) fixed; theta advances
 
@@ -108,6 +109,7 @@ def make_spin_dataset(
         f.attrs["dt"]          = DT
         f.attrs["hold_k"]      = steps_per_ep   # action constant across the whole spin
         f.attrs["render_marker"] = marker
+        f.attrs["nose_radius"]   = nose_radius
         f.attrs["kind"]        = "spin_in_place"
         f.attrs["seed"]        = seed
         f.attrs["n_episodes_kept"] = n_episodes
@@ -123,3 +125,6 @@ def make_spin_dataset(
 if __name__ == "__main__":
     make_spin_dataset(DATASETS_DIR / "spin_64x64.h5",      marker="none", grid_size=64, seed=0)
     make_spin_dataset(DATASETS_DIR / "spin_64x64_nose.h5", marker="dot",  grid_size=64, seed=0)
+    # big-nose variant: nose ~2x the body area, so plain-MSE reconstruction must
+    # encode heading (the cheap-pixel problem that foreground weighting failed to fix)
+    make_spin_dataset(DATASETS_DIR / "spin_64x64_bignose.h5", marker="dot", grid_size=64, seed=0, nose_radius=0.06)
