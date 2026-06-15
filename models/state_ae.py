@@ -59,8 +59,7 @@ class StateEncoder(nn.Module):
     @staticmethod
     def constrain(raw: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
         pos  = torch.sigmoid(raw[:, :2])
-        head = raw[:, 2:4]
-        head = head / torch.sqrt((head * head).sum(1, keepdim=True) + eps)
+        head = F.normalize(raw[:, 2:4], dim=1, eps=eps)
         return torch.cat([pos, head], dim=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
