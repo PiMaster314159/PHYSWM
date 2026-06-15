@@ -120,15 +120,23 @@ class EgoWorldModel(nn.Module):
 
     def __init__(self, grid_size: int = GRID_SIZE, dt: float = DT,
                  channels: tuple = ENCODER_CHANNELS, in_channels: int = IN_CHANNELS,
-                 renderer_hidden: int = 512, residual_budget: float = 0.0):
+                 renderer_hidden: int = 512, residual_budget: float = 0.0,
+                 learn_coeffs: bool = False):
         super().__init__()
         self.dt = dt
         self.residual_budget = residual_budget
         self.encoder  = StateEncoder(grid_size, channels, in_channels)
         self.renderer = Renderer(STATE_DIM, grid_size, renderer_hidden)
-        # gray-box physical coefficients (log-space so they stay positive, =1 at init)
-        self.log_a_v     = nn.Parameter(torch.zeros(()))
-        self.log_a_omega = nn.Parameter(torch.zeros(()))
+        # gray-box physical coefficients (log-space, =1 at init). FROZEN by default:
+        # the toy's kinematics are known exactly, and a learnable a_omega just collapses
+        # to ~0 (a "don't rotate" escape hatch that lets the encoder leave heading
+        # unencoded). Learn them only when the physics scaling is genuinely unknown.
+        if learn_coeffs:
+            self.log_a_v     = nn.Parameter(torch.zeros(()))
+            self.log_a_omega = nn.Parameter(torch.zeros(()))
+        else:
+            self.register_buffer("log_a_v",     torch.zeros(()))
+            self.register_buffer("log_a_omega", torch.zeros(()))
         if residual_budget > 0:
             self.residual = nn.Sequential(
                 nn.Linear(STATE_DIM + ACTION_DIM, 64), nn.ReLU(inplace=True),
@@ -175,8 +183,8 @@ def ego_loss(out: dict, frame: torch.Tensor, next_frame: torch.Tensor,
 def _test_state_ae():
     torch.manual_seed(0)
     B, g = 8, 64
-    for budget in (0.0, 0.1):
-        m = EgoWorldModel(grid_size=g, residual_budget=budget)
+    for budget, learn in ((0.0, False), (0.1, True)):
+        m = EgoWorldModel(grid_size=g, residual_budget=budget, learn_coeffs=learn)
         frame, action, nxt = torch.rand(B, 1, g, g), torch.rand(B, 2), torch.rand(B, 1, g, g)
         out = m(frame, action, nxt)
         assert out["s"].shape == (B, STATE_DIM)
@@ -186,9 +194,11 @@ def _test_state_ae():
         assert torch.allclose(out["s"][:, 2:].norm(dim=1), torch.ones(B), atol=1e-4)
         total, parts = ego_loss(out, frame, nxt)
         m.zero_grad(); total.backward()
-        assert m.log_a_v.grad is not None and m.encoder.head.weight.grad.abs().sum() > 0
-        print(f"budget={budget}  total={parts['total']:.4f}  recon={parts['recon']:.4f}  "
-              f"dyn={parts['dyn']:.4f}  pred_recon={parts['pred_recon']:.4f}")
+        assert m.encoder.head.weight.grad.abs().sum() > 0
+        if learn:                                  # coefficients get gradient only when learnable
+            assert m.log_a_v.grad is not None
+        print(f"budget={budget} learn_coeffs={learn}  total={parts['total']:.4f}  "
+              f"recon={parts['recon']:.4f}  dyn={parts['dyn']:.4f}  pred_recon={parts['pred_recon']:.4f}")
 
     # ego_step sanity vs the simulator's convention
     s = torch.tensor([[0.5, 0.5, 1.0, 0.0]])               # at center, facing +x
