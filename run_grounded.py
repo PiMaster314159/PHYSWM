@@ -50,6 +50,8 @@ def parse_args():
                    help="max scale of the learned block correction (gray-box only)")
     p.add_argument("--use-decoder", action="store_true", help="reconstruct frame from the block (grounding booster)")
     p.add_argument("--lam-recon", type=float, default=C.LAM_RECON, help="decoder reconstruction weight")
+    p.add_argument("--recon-fg-weight", type=float, default=C.RECON_FG_WEIGHT,
+                   help="foreground weighting of recon (per-pixel weight = 1 + w*target); forces heading into the block")
     # training
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
@@ -81,6 +83,7 @@ def main():
     tag = f"grounded_s{a.pred_step}_e{a.epochs}"
     if not a.lock_block:   tag += f"_gray{a.block_budget:g}"
     if a.lam_recon > 0:    tag += f"_rec{a.lam_recon:g}"
+    if a.recon_fg_weight > 0: tag += f"_fg{a.recon_fg_weight:g}"
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
     ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
@@ -109,7 +112,8 @@ def main():
         for b in train_dl:
             frame = b["frame"].to(a.device)
             out   = model(frame, b["action"].to(a.device), b["next_frame"].to(a.device))
-            loss, parts = grounded_loss(out, frame, block_dim=a.block_dim, lam=a.lam, lam_recon=a.lam_recon)
+            loss, parts = grounded_loss(out, frame, block_dim=a.block_dim, lam=a.lam,
+                                        lam_recon=a.lam_recon, recon_fg_weight=a.recon_fg_weight)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)   # governor on the block feedback loop

@@ -241,12 +241,18 @@ class GroundedJEPA(nn.Module):
 
 
 def grounded_loss(out: dict, frame: torch.Tensor, block_dim: int = PHYSICS_BLOCK_DIM,
-                  lam: float = 0.005, lam_recon: float = 0.0) -> tuple:
+                  lam: float = 0.005, lam_recon: float = 0.0, recon_fg_weight: float = 0.0) -> tuple:
     """Prediction MSE (all dims) + SIGReg (FREE dims only) + optional recon.
 
     The block part of the prediction loss is the label-free physics-consistency
     constraint (because the block forward is locked kinematics). SIGReg is applied
     only to dims block_dim.. so the block is free to hold real-scale state.
+
+    recon_fg_weight > 0 makes the recon loss foreground-weighted: per-pixel weight
+    = 1 + recon_fg_weight * target. Plain MSE is dominated by the easy black
+    background and tolerates a blurry, orientation-agnostic blob; weighting by the
+    bright triangle/nose forces the decoder to draw a sharp, correctly-oriented
+    shape, which it can only do if heading is in the block.
     """
     pred  = F.mse_loss(out["pred_next_z"], out["target_next_z"].detach())
     sig   = sigreg_loss(out["z"][:, block_dim:])
@@ -254,7 +260,18 @@ def grounded_loss(out: dict, frame: torch.Tensor, block_dim: int = PHYSICS_BLOCK
     parts = {"pred": pred.item(), "sigreg": sig.item()}
 
     if lam_recon > 0 and "recon" in out:
-        recon = F.mse_loss(out["recon"], frame)
+        if recon_fg_weight > 0:
+            # Average the error over foreground and background pixels SEPARATELY, so
+            # the shape (~0.7% of pixels) is not drowned by the easy black background
+            # (~99%). recon = bg_mean + recon_fg_weight * fg_mean. fg = lit pixels
+            # (triangle body + nose); getting their layout right needs the orientation.
+            err2 = (out["recon"] - frame) ** 2
+            fg   = (frame > 0).float()
+            fg_mean = (err2 * fg).sum() / fg.sum().clamp(min=1.0)
+            bg_mean = (err2 * (1.0 - fg)).sum() / (1.0 - fg).sum().clamp(min=1.0)
+            recon   = bg_mean + recon_fg_weight * fg_mean
+        else:
+            recon = F.mse_loss(out["recon"], frame)
         total = total + lam_recon * recon
         parts["recon"] = recon.item()
 

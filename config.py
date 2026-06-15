@@ -88,6 +88,7 @@ PHYSICS_BLOCK_DIM      = 4       # dims 0..3 = x, y, cos th, sin th
 GROUNDED_LOCK_BLOCK    = True    # True: block evolves by pure kinematics (no MLP). False: gray-box.
 GROUNDED_BLOCK_BUDGET  = 0.0     # gray-box only (lock=False): max scale of the learned block correction
 LAM_RECON              = 0.0     # optional decoder: reconstruct frame from the block alone (0 = off)
+RECON_FG_WEIGHT        = 0.0     # foreground weighting of recon. 0 = plain MSE. >0: recon = bg_mean + w*fg_mean, averaging error over background vs lit (triangle/nose) pixels SEPARATELY so the shape is not drowned by the ~99% black background; the decoder must then draw a sharp, correctly-oriented shape, forcing heading into the block.
 
 # --- Training --------------------------------------------------------------
 LR         = 1e-3
