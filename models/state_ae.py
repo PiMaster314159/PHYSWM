@@ -150,7 +150,7 @@ class EgoWorldModel(nn.Module):
     def __init__(self, grid_size: int = GRID_SIZE, dt: float = DT,
                  channels: tuple = ENCODER_CHANNELS, in_channels: int = IN_CHANNELS,
                  renderer_hidden: int = 512, residual_budget: float = 0.0,
-                 learn_coeffs: bool = False, decoder: str = "broadcast"):
+                 learn_coeffs: bool = False, decoder: str = "mlp"):
         super().__init__()
         self.dt = dt
         self.residual_budget = residual_budget

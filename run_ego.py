@@ -57,14 +57,22 @@ def pearson_per_dim(Z: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
     return (Zc * tc.unsqueeze(1)).mean(0) / (Z.std(0) * t.std() + 1e-8)
 
 
-def probe_pose(Z_tr, T_tr, Z_va, S_va, hidden, device, epochs=60):
-    """Fit a probe Z->(x,y,cos,sin); report heading flip %, mae, x/y R^2."""
+def probe_pose(Z_tr, T_tr, Z_va, S_va, hidden, device, epochs=120, bs=4096):
+    """Fit a probe Z->(x,y,cos,sin); report heading flip %, mae, x/y R^2.
+
+    Minibatched so the probe actually converges. (Full-batch GD for a few dozen steps
+    underfits badly, giving bogus negative R^2 that understates the grounding.)
+    """
     probe = (nn.Linear(Z_tr.shape[1], 4) if hidden == 0 else
              nn.Sequential(nn.Linear(Z_tr.shape[1], hidden), nn.ReLU(), nn.Linear(hidden, 4)))
     probe.to(device); Z_tr, T_tr = Z_tr.to(device), T_tr.to(device)
     opt = torch.optim.Adam(probe.parameters(), lr=1e-3)
+    n = Z_tr.shape[0]
     for _ in range(epochs):
-        opt.zero_grad(); F.mse_loss(probe(Z_tr), T_tr).backward(); opt.step()
+        idx = torch.randperm(n, device=device)
+        for i in range(0, n, bs):
+            b = idx[i:i + bs]
+            opt.zero_grad(); F.mse_loss(probe(Z_tr[b]), T_tr[b]).backward(); opt.step()
     with torch.no_grad():
         p = probe(Z_va.to(device)).cpu()
     th_pred = torch.atan2(p[:, 3], p[:, 2])
@@ -92,7 +100,7 @@ def parse_args():
     p.add_argument("--learn-coeffs", action="store_true", help="learn a_v/a_omega (gray-box); default frozen at the known values (=1) so they can't collapse")
     p.add_argument("--lam-var",   type=float, default=1.0, help="variance-floor weight (anti-collapse: forbids dead state dims). 0 = off")
     p.add_argument("--var-gamma", type=float, default=0.1, help="per-dim std floor for the variance term")
-    p.add_argument("--decoder", default="broadcast", choices=["broadcast", "mlp"], help="renderer: spatial-broadcast (can place objects) or MLP (collapses to mean frame)")
+    p.add_argument("--decoder", default="mlp", choices=["broadcast", "mlp"], help="renderer: MLP (fast) or spatial-broadcast (slower, better at placing objects)")
     p.add_argument("--recon-fg-weight", type=float, default=5.0, help="foreground weighting of recon (bg_mean + w*fg_mean); stops the ~99%% black background from drowning the object. 0 = plain MSE")
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
