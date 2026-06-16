@@ -90,6 +90,8 @@ def parse_args():
     p.add_argument("--lam-pred", type=float, default=1.0, help="predicted-state -> next-frame reconstruction weight")
     p.add_argument("--residual-budget", type=float, default=0.0, help="gray-box: bounded learned dynamics correction (0 = pure kinematics)")
     p.add_argument("--learn-coeffs", action="store_true", help="learn a_v/a_omega (gray-box); default frozen at the known values (=1) so they can't collapse")
+    p.add_argument("--lam-var",   type=float, default=1.0, help="variance-floor weight (anti-collapse: forbids dead state dims). 0 = off")
+    p.add_argument("--var-gamma", type=float, default=0.1, help="per-dim std floor for the variance term")
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
     p.add_argument("--batch-size", type=int, default=C.BATCH_SIZE)
@@ -106,7 +108,8 @@ def val_total(model, dl, device, a, max_batches=50):
         if i >= max_batches:
             break
         out = model(b["frame"].to(device), b["action"].to(device), b["next_frame"].to(device))
-        _, parts = ego_loss(out, b["frame"].to(device), b["next_frame"].to(device), a.lam_dyn, a.lam_pred)
+        _, parts = ego_loss(out, b["frame"].to(device), b["next_frame"].to(device),
+                            a.lam_dyn, a.lam_pred, a.lam_var, a.var_gamma)
         tot.append(parts["total"])
     model.train()
     return sum(tot) / max(len(tot), 1)
@@ -117,6 +120,7 @@ def main():
     tag = f"ego_s{a.pred_step}_e{a.epochs}"
     if a.lam_dyn != 1.0:       tag += f"_ld{a.lam_dyn:g}"      # so different weights -> different folders
     if a.lam_pred != 1.0:      tag += f"_lp{a.lam_pred:g}"
+    if a.lam_var > 0:          tag += f"_v{a.lam_var:g}"     # mark the variance-floor runs
     if a.residual_budget > 0:  tag += f"_gray{a.residual_budget:g}"
     if a.learn_coeffs:         tag += "_learn"
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
@@ -129,7 +133,8 @@ def main():
 
     print(f"=== {experiment} ===")
     print(f"device={a.device}  data={data_path.name}  state_dim={STATE_DIM}  "
-          f"lam_dyn={a.lam_dyn}  lam_pred={a.lam_pred}  residual_budget={a.residual_budget}")
+          f"lam_dyn={a.lam_dyn}  lam_pred={a.lam_pred}  lam_var={a.lam_var}(gamma={a.var_gamma})  "
+          f"residual_budget={a.residual_budget}")
 
     torch.manual_seed(C.SEED)
     train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED, step=a.pred_step)
@@ -143,19 +148,21 @@ def main():
         for b in train_dl:
             frame, nxt = b["frame"].to(a.device), b["next_frame"].to(a.device)
             out = model(frame, b["action"].to(a.device), nxt)
-            loss, parts = ego_loss(out, frame, nxt, a.lam_dyn, a.lam_pred)
+            loss, parts = ego_loss(out, frame, nxt, a.lam_dyn, a.lam_pred, a.lam_var, a.var_gamma)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             opt.step(); step += 1
             if step % 50 == 0:
-                st_std = out["s"].std(0).mean().item()
+                per_dim = out["s"].std(0).tolist()                 # [std d0, d1, d2, d3]
+                st_std = sum(per_dim) / len(per_dim)
                 row = {"step": step, "epoch": epoch + 1, **parts,
                        "a_v": model.log_a_v.exp().item(), "a_omega": model.log_a_omega.exp().item(),
-                       "state_std": st_std}
+                       "state_std": st_std,
+                       "std0": per_dim[0], "std1": per_dim[1], "std2": per_dim[2], "std3": per_dim[3]}
                 train_hist.append(row)
                 print(f"  step {step:5d}  total {parts['total']:.4f}  recon {parts['recon']:.4f}  "
-                      f"dyn {parts['dyn']:.4f}  pred_recon {parts['pred_recon']:.4f}  "
-                      f"a_v {row['a_v']:.3f}  a_omega {row['a_omega']:.3f}  state_std {st_std:.3f}")
+                      f"dyn {parts['dyn']:.4f}  pred_recon {parts['pred_recon']:.4f}  var {parts['var']:.4f}  "
+                      f"std[{per_dim[0]:.2f} {per_dim[1]:.2f} {per_dim[2]:.2f} {per_dim[3]:.2f}]")
         v = val_total(model, val_dl, a.device, a)
         val_hist.append({"epoch": epoch + 1, "step": step, "val_total": v})
         print(f"epoch {epoch+1}/{a.epochs}  val total {v:.4f}")
@@ -171,7 +178,8 @@ def main():
             for r in rows:
                 w.writerow([r[c] for c in cols])
     _write_csv(report_dir / "train_history.csv", train_hist,
-               ["step", "epoch", "total", "recon", "dyn", "pred_recon", "a_v", "a_omega", "state_std"])
+               ["step", "epoch", "total", "recon", "dyn", "pred_recon", "var",
+                "a_v", "a_omega", "state_std", "std0", "std1", "std2", "std3"])
     _write_csv(report_dir / "val_history.csv", val_hist, ["epoch", "step", "val_total"])
     print(f"wrote train_history.csv ({len(train_hist)} rows) + val_history.csv")
 

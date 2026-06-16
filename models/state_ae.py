@@ -167,13 +167,24 @@ class EgoWorldModel(nn.Module):
 
 
 def ego_loss(out: dict, frame: torch.Tensor, next_frame: torch.Tensor,
-             lam_dyn: float = 1.0, lam_pred: float = 1.0) -> tuple:
-    """recon (grounds state) + dyn (physics in state space) + pred_recon (predicted state -> pixels)."""
+             lam_dyn: float = 1.0, lam_pred: float = 1.0,
+             lam_var: float = 0.0, var_gamma: float = 0.1) -> tuple:
+    """recon (grounds state) + dyn (physics in state space) + pred_recon (predicted->pixels)
+    + an optional variance floor that forbids any state dim from going dead.
+
+    The variance floor is the VICReg variance term: penalize a dim whose batch std drops
+    below var_gamma. It is pure anti-collapse, it does NOT decorrelate the dims, so it
+    keeps them interpretable, but it stops the encoder from zeroing out d0,d1 or caving
+    the whole state to a constant under the collapse-prone dyn loss.
+    """
     recon = F.mse_loss(out["recon"], frame)
     dyn   = F.mse_loss(out["s_pred"], out["s_next"].detach())
     pred  = F.mse_loss(out["pred_recon"], next_frame)
-    total = recon + lam_dyn * dyn + lam_pred * pred
-    parts = {"recon": recon.item(), "dyn": dyn.item(), "pred_recon": pred.item(), "total": total.item()}
+    std   = (out["s"].var(0) + 1e-4).sqrt()                 # per-dim std over the batch (grad-safe)
+    var   = F.relu(var_gamma - std).mean()                  # > 0 only for dims below the floor
+    total = recon + lam_dyn * dyn + lam_pred * pred + lam_var * var
+    parts = {"recon": recon.item(), "dyn": dyn.item(), "pred_recon": pred.item(),
+             "var": var.item(), "total": total.item()}
     return total, parts
 
 
