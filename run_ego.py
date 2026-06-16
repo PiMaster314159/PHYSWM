@@ -93,6 +93,7 @@ def parse_args():
     p.add_argument("--lam-var",   type=float, default=1.0, help="variance-floor weight (anti-collapse: forbids dead state dims). 0 = off")
     p.add_argument("--var-gamma", type=float, default=0.1, help="per-dim std floor for the variance term")
     p.add_argument("--decoder", default="broadcast", choices=["broadcast", "mlp"], help="renderer: spatial-broadcast (can place objects) or MLP (collapses to mean frame)")
+    p.add_argument("--recon-fg-weight", type=float, default=5.0, help="foreground weighting of recon (bg_mean + w*fg_mean); stops the ~99%% black background from drowning the object. 0 = plain MSE")
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
     p.add_argument("--batch-size", type=int, default=C.BATCH_SIZE)
@@ -110,7 +111,7 @@ def val_total(model, dl, device, a, max_batches=50):
             break
         out = model(b["frame"].to(device), b["action"].to(device), b["next_frame"].to(device))
         _, parts = ego_loss(out, b["frame"].to(device), b["next_frame"].to(device),
-                            a.lam_dyn, a.lam_pred, a.lam_var, a.var_gamma)
+                            a.lam_dyn, a.lam_pred, a.lam_var, a.var_gamma, a.recon_fg_weight)
         tot.append(parts["total"])
     model.train()
     return sum(tot) / max(len(tot), 1)
@@ -122,6 +123,7 @@ def main():
     if a.lam_dyn != 1.0:       tag += f"_ld{a.lam_dyn:g}"      # so different weights -> different folders
     if a.lam_pred != 1.0:      tag += f"_lp{a.lam_pred:g}"
     if a.lam_var > 0:          tag += f"_v{a.lam_var:g}"     # mark the variance-floor runs
+    if a.recon_fg_weight > 0:  tag += f"_fg{a.recon_fg_weight:g}"
     if a.residual_budget > 0:  tag += f"_gray{a.residual_budget:g}"
     if a.learn_coeffs:         tag += "_learn"
     tag += "_bc" if a.decoder == "broadcast" else "_mlpdec"   # decoder in the name -> own folder
@@ -151,7 +153,8 @@ def main():
         for b in train_dl:
             frame, nxt = b["frame"].to(a.device), b["next_frame"].to(a.device)
             out = model(frame, b["action"].to(a.device), nxt)
-            loss, parts = ego_loss(out, frame, nxt, a.lam_dyn, a.lam_pred, a.lam_var, a.var_gamma)
+            loss, parts = ego_loss(out, frame, nxt, a.lam_dyn, a.lam_pred,
+                                   a.lam_var, a.var_gamma, a.recon_fg_weight)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             opt.step(); step += 1
