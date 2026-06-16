@@ -92,6 +92,7 @@ def parse_args():
     p.add_argument("--learn-coeffs", action="store_true", help="learn a_v/a_omega (gray-box); default frozen at the known values (=1) so they can't collapse")
     p.add_argument("--lam-var",   type=float, default=1.0, help="variance-floor weight (anti-collapse: forbids dead state dims). 0 = off")
     p.add_argument("--var-gamma", type=float, default=0.1, help="per-dim std floor for the variance term")
+    p.add_argument("--decoder", default="broadcast", choices=["broadcast", "mlp"], help="renderer: spatial-broadcast (can place objects) or MLP (collapses to mean frame)")
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
     p.add_argument("--batch-size", type=int, default=C.BATCH_SIZE)
@@ -123,6 +124,7 @@ def main():
     if a.lam_var > 0:          tag += f"_v{a.lam_var:g}"     # mark the variance-floor runs
     if a.residual_budget > 0:  tag += f"_gray{a.residual_budget:g}"
     if a.learn_coeffs:         tag += "_learn"
+    tag += "_bc" if a.decoder == "broadcast" else "_mlpdec"   # decoder in the name -> own folder
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
     ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
@@ -139,7 +141,8 @@ def main():
     torch.manual_seed(C.SEED)
     train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED, step=a.pred_step)
     model = EgoWorldModel(grid_size=a.grid_size, dt=a.pred_step * C.DT,
-                          residual_budget=a.residual_budget, learn_coeffs=a.learn_coeffs).to(a.device).train()
+                          residual_budget=a.residual_budget, learn_coeffs=a.learn_coeffs,
+                          decoder=a.decoder).to(a.device).train()
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
 
     best, step = float("inf"), 0

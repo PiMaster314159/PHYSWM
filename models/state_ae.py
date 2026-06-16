@@ -87,6 +87,35 @@ class Renderer(nn.Module):
         return self.net(s).view(-1, 1, g, g)
 
 
+class SpatialBroadcastDecoder(nn.Module):
+    """state -> frame via spatial broadcast (Watters et al. 2019).
+
+    Tile the state across the H x W grid, append fixed (x, y) coordinate channels,
+    then run small stride-1 convs. Unlike an MLP, this CAN place a small object at an
+    arbitrary position, which is exactly what the MLP renderer fails at (it collapses
+    to drawing the mean frame), so reconstruction can finally demand true position.
+    """
+
+    def __init__(self, state_dim: int = STATE_DIM, grid_size: int = GRID_SIZE, hidden: int = 64):
+        super().__init__()
+        self.grid_size = grid_size
+        ys, xs = torch.meshgrid(torch.linspace(-1, 1, grid_size),
+                                torch.linspace(-1, 1, grid_size), indexing="ij")
+        self.register_buffer("coords", torch.stack([xs, ys], dim=0))   # (2, H, W), fixed
+        self.net = nn.Sequential(
+            nn.Conv2d(state_dim + 2, hidden, 3, padding=1), nn.ReLU(inplace=True),
+            nn.Conv2d(hidden, hidden, 3, padding=1),        nn.ReLU(inplace=True),
+            nn.Conv2d(hidden, hidden, 3, padding=1),        nn.ReLU(inplace=True),
+            nn.Conv2d(hidden, 1, 1),
+        )
+
+    def forward(self, s: torch.Tensor) -> torch.Tensor:
+        B, g = s.shape[0], self.grid_size
+        s_map  = s.view(B, -1, 1, 1).expand(B, s.shape[1], g, g)        # broadcast state over the grid
+        coords = self.coords.unsqueeze(0).expand(B, 2, g, g)
+        return torch.sigmoid(self.net(torch.cat([s_map, coords], dim=1)))
+
+
 # ## Gray-box dynamics
 
 def ego_step(state: torch.Tensor, action: torch.Tensor, dt: float,
@@ -121,12 +150,19 @@ class EgoWorldModel(nn.Module):
     def __init__(self, grid_size: int = GRID_SIZE, dt: float = DT,
                  channels: tuple = ENCODER_CHANNELS, in_channels: int = IN_CHANNELS,
                  renderer_hidden: int = 512, residual_budget: float = 0.0,
-                 learn_coeffs: bool = False):
+                 learn_coeffs: bool = False, decoder: str = "broadcast"):
         super().__init__()
         self.dt = dt
         self.residual_budget = residual_budget
         self.encoder  = StateEncoder(grid_size, channels, in_channels)
-        self.renderer = Renderer(STATE_DIM, grid_size, renderer_hidden)
+        # spatial-broadcast decoder can place an object at (x,y); the MLP cannot (it
+        # collapses to the mean frame), so "broadcast" is the default.
+        if decoder == "broadcast":
+            self.renderer = SpatialBroadcastDecoder(STATE_DIM, grid_size)
+        elif decoder == "mlp":
+            self.renderer = Renderer(STATE_DIM, grid_size, renderer_hidden)
+        else:
+            raise ValueError(f"decoder must be 'broadcast' or 'mlp', got {decoder!r}")
         # gray-box physical coefficients (log-space, =1 at init). FROZEN by default:
         # the toy's kinematics are known exactly, and a learnable a_omega just collapses
         # to ~0 (a "don't rotate" escape hatch that lets the encoder leave heading
@@ -194,8 +230,8 @@ def ego_loss(out: dict, frame: torch.Tensor, next_frame: torch.Tensor,
 def _test_state_ae():
     torch.manual_seed(0)
     B, g = 8, 64
-    for budget, learn in ((0.0, False), (0.1, True)):
-        m = EgoWorldModel(grid_size=g, residual_budget=budget, learn_coeffs=learn)
+    for budget, learn, decoder in ((0.0, False, "broadcast"), (0.1, True, "mlp")):
+        m = EgoWorldModel(grid_size=g, residual_budget=budget, learn_coeffs=learn, decoder=decoder)
         frame, action, nxt = torch.rand(B, 1, g, g), torch.rand(B, 2), torch.rand(B, 1, g, g)
         out = m(frame, action, nxt)
         assert out["s"].shape == (B, STATE_DIM)
@@ -203,13 +239,14 @@ def _test_state_ae():
         # state is constrained: position in [0,1], heading unit norm
         assert (out["s"][:, :2] >= 0).all() and (out["s"][:, :2] <= 1).all()
         assert torch.allclose(out["s"][:, 2:].norm(dim=1), torch.ones(B), atol=1e-4)
-        total, parts = ego_loss(out, frame, nxt)
+        total, parts = ego_loss(out, frame, nxt, lam_var=1.0)
         m.zero_grad(); total.backward()
         assert m.encoder.head.weight.grad.abs().sum() > 0
+        assert m.renderer.net[0].weight.grad.abs().sum() > 0      # decoder gets gradient
         if learn:                                  # coefficients get gradient only when learnable
             assert m.log_a_v.grad is not None
-        print(f"budget={budget} learn_coeffs={learn}  total={parts['total']:.4f}  "
-              f"recon={parts['recon']:.4f}  dyn={parts['dyn']:.4f}  pred_recon={parts['pred_recon']:.4f}")
+        print(f"decoder={decoder} budget={budget} learn_coeffs={learn}  total={parts['total']:.4f}  "
+              f"recon={parts['recon']:.4f}  dyn={parts['dyn']:.4f}  var={parts['var']:.4f}")
 
     # ego_step sanity vs the simulator's convention
     s = torch.tensor([[0.5, 0.5, 1.0, 0.0]])               # at center, facing +x
