@@ -40,7 +40,7 @@ from typing import Optional, Union
 
 from config import (
     DT, WORLD_BOUNDS, V_MEAN, V_STD, OMEGA_MEAN, OMEGA_STD,
-    GRID_SIZE, HOLD_K, MAX_STEPS, N_EPISODES, SEED, RENDER_MARKER,
+    GRID_SIZE, HOLD_K, MAX_STEPS, N_EPISODES, SEED, RENDER_MARKER, NOSE_RADIUS,
 )
 from sim.render import render_frame
 from sim.environment import env_step, bounding_radius
@@ -179,6 +179,7 @@ def run_episode(
     omega_mean: float = OMEGA_MEAN,
     omega_std: float = OMEGA_STD,
     marker: str = RENDER_MARKER,
+    nose_radius: float = NOSE_RADIUS,
 ) -> tuple:
     """Run one random-action episode.
 
@@ -227,7 +228,7 @@ def run_episode(
     frame_dtype = np.uint8 if marker == "none" else np.float32
 
     def _render(s):
-        return render_frame(s, grid_size=grid_size, marker=marker).astype(frame_dtype)
+        return render_frame(s, grid_size=grid_size, marker=marker, nose_radius=nose_radius).astype(frame_dtype)
 
     state = sample_initial_state(rng, world_bounds=world_bounds)
     states = [state]
@@ -330,6 +331,7 @@ def collect_dataset(
     min_length: int = 10,
     seed: int = SEED,
     marker: str = RENDER_MARKER,
+    nose_radius: float = NOSE_RADIUS,
     progress_every: int = 100,
 ) -> None:
     """Stream `n_episodes` random-action episodes to an HDF5 file.
@@ -407,7 +409,7 @@ def collect_dataset(
                 world_bounds=world_bounds, dt=dt, hold_k=hold_k,
                 v_mean=v_mean, v_std=v_std,
                 omega_mean=omega_mean, omega_std=omega_std,
-                marker=marker,
+                marker=marker, nose_radius=nose_radius,
             )
             if len(states) < min_length:
                 continue
@@ -439,6 +441,7 @@ def collect_dataset(
         f.attrs["min_length"] = min_length
         f.attrs["seed"] = seed
         f.attrs["render_marker"] = marker
+        f.attrs["nose_radius"] = nose_radius
         f.attrs["v_mean"] = v_mean
         f.attrs["v_std"] = v_std
         f.attrs["omega_mean"] = omega_mean
