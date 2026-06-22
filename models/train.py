@@ -36,10 +36,10 @@ import matplotlib.pyplot as plt
 from typing import Optional, Union
 
 try:
-    from models.jepa import JEPA, jepa_loss, sigreg_loss
+    from models.jepa import JEPA, jepa_loss, sigreg_loss, state_to_target
     from models.dataset import make_dataloaders
 except ImportError:
-    from jepa import JEPA, jepa_loss, sigreg_loss
+    from jepa import JEPA, jepa_loss, sigreg_loss, state_to_target
     from dataset import make_dataloaders
 
 
@@ -116,6 +116,10 @@ def train_jepa(
     lr: float = LR,
     lam: float = LAM,
     lam_phys: float = LAM_PHYS,
+    lam_anchor: float = 0.0,
+    lam_readout: float = 0.0,
+    anchor_mean: Optional[torch.Tensor] = None,
+    anchor_std: Optional[torch.Tensor] = None,
     device: Optional[str] = None,
     log_every: int = 50,
     max_batches: Optional[int] = None,
@@ -173,7 +177,14 @@ def train_jepa(
                 batch["action"].to(device),
                 batch["next_frame"].to(device),
             )
-            loss, parts = jepa_loss(out, lam=lam, lam_phys=lam_phys)
+            s_target = None
+            if (lam_anchor > 0 or lam_readout > 0) and "state" in batch:
+                t = state_to_target(batch["state"]).to(device)
+                if anchor_mean is not None:                  # standardize to match BN/SIGReg scale
+                    t = (t - anchor_mean.to(device)) / anchor_std.to(device)
+                s_target = t
+            loss, parts = jepa_loss(out, lam=lam, lam_phys=lam_phys, s_target=s_target,
+                                    lam_anchor=lam_anchor, lam_readout=lam_readout)
 
             opt.zero_grad()
             loss.backward()
@@ -185,8 +196,10 @@ def train_jepa(
                 parts["latent_std"] = out["z"].std(dim=0).mean().item()
                 history["train"].append(parts)
                 phys_str = f"  phys {parts['phys']:.4f}" if "phys" in parts else ""
+                anc_str  = f"  anchor {parts['anchor']:.4f}" if "anchor" in parts else ""
+                rd_str   = f"  readout {parts['readout']:.4f}" if "readout" in parts else ""
                 print(f"  step {step:5d}  total {parts['total']:.4f}  "
-                      f"pred {parts['pred']:.4f}  sigreg {parts['sigreg']:.4f}{phys_str}  "
+                      f"pred {parts['pred']:.4f}  sigreg {parts['sigreg']:.4f}{phys_str}{anc_str}{rd_str}  "
                       f"latent_std {parts['latent_std']:.3f}")
 
         if val_dl is not None:

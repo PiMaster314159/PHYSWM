@@ -267,6 +267,7 @@ class JEPA(nn.Module):
         predictor_hidden: int = PREDICTOR_HIDDEN,
         predictor_mode: str = PREDICTOR_MODE,
         predictor_lock_pose: bool = PHYSICS_LOCK_POSE,
+        state_head: bool = False,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -282,6 +283,11 @@ class JEPA(nn.Module):
             mode=predictor_mode,
             lock_pose=predictor_lock_pose,
         )
+        # optional LINEAR state-readout head (privileged supervision that does NOT fight
+        # SIGReg: it reads pose out of the whole latent, so the code can stay distributed
+        # and isotropic while still being linearly decodable to pose). Linear (not MLP) on
+        # purpose, so a low readout loss means pose is genuinely linearly present.
+        self.state_head = nn.Linear(latent_dim, 4) if state_head else None
 
     def encode(self, frame: torch.Tensor) -> torch.Tensor:
         """(B, 1, H, W) -> (B, latent_dim)."""
@@ -314,6 +320,8 @@ class JEPA(nn.Module):
         out = {"z": z, "pred_next_z": pred_next_z, "target_next_z": target_next_z}
         if self.predictor.mode == "physics":
             out["phys_next_z"] = self.predictor._physics_base(z, action)
+        if self.state_head is not None:
+            out["state_hat"] = self.state_head(z)
         return out
 
 
@@ -380,8 +388,17 @@ def sigreg_loss(
     return T_stat.mean()
 
 
-def jepa_loss(out: dict, lam: float = 1.0, lam_phys: float = 0.0) -> tuple:
-    """LeWM training loss: prediction MSE + SIGReg (+ optional physics consistency).
+def state_to_target(states: torch.Tensor) -> torch.Tensor:
+    """(N,3) (x,y,theta) -> (N,4) (x,y,cos,sin). Shared anchor-target builder."""
+    x, y, th = states[:, 0], states[:, 1], states[:, 2]
+    return torch.stack([x, y, torch.cos(th), torch.sin(th)], dim=1)
+
+
+def jepa_loss(out: dict, lam: float = 1.0, lam_phys: float = 0.0,
+              s_target: torch.Tensor = None, lam_anchor: float = 0.0,
+              lam_readout: float = 0.0) -> tuple:
+    """LeWM training loss: prediction MSE + SIGReg (+ optional physics consistency
+    + optional privileged state anchor).
 
     Parameters
     ----------
@@ -394,11 +411,18 @@ def jepa_loss(out: dict, lam: float = 1.0, lam_phys: float = 0.0) -> tuple:
         Weight on the physics-consistency term. Only active when > 0 and the
         model is in physics mode (out has phys_next_z). Pulls the encoded next
         pose (dims 0,1,2) toward the kinematic step of the current latent.
+    s_target : torch.Tensor, optional
+        Standardized pose target (B, K) for the first K latent dims. STANDARDIZED
+        (zero-mean/unit-std) because the BatchNorm'd, SIGReg'd latent is mean-0/std-1;
+        a raw-pose target would fight both. Supplied only during training.
+    lam_anchor : float
+        Weight on the state anchor. The label-free analogue of the ego model's anchor:
+        it tests whether SIGReg's isotropy will tolerate or fight a pinned pose subspace.
 
     Returns
     -------
     total : scalar loss with grad
-    parts : dict of float parts for logging (pred, sigreg, phys, total)
+    parts : dict of float parts for logging (pred, sigreg, phys, anchor, total)
     """
     pred  = F.mse_loss(out["pred_next_z"], out["target_next_z"].detach())
     sig   = sigreg_loss(out["z"])
@@ -409,6 +433,17 @@ def jepa_loss(out: dict, lam: float = 1.0, lam_phys: float = 0.0) -> tuple:
         phys = F.mse_loss(out["phys_next_z"][:, :3], out["target_next_z"][:, :3].detach())
         total = total + lam_phys * phys
         parts["phys"] = phys.item()
+
+    if lam_anchor > 0 and s_target is not None:
+        K = s_target.shape[1]
+        anchor = F.mse_loss(out["z"][:, :K], s_target)
+        total = total + lam_anchor * anchor
+        parts["anchor"] = anchor.item()
+
+    if lam_readout > 0 and "state_hat" in out and s_target is not None:
+        readout = F.mse_loss(out["state_hat"], s_target)
+        total = total + lam_readout * readout
+        parts["readout"] = readout.item()
 
     parts["total"] = total.item()
     return total, parts

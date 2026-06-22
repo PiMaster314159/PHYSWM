@@ -35,7 +35,7 @@ if str(ROOT) not in sys.path:
 import torch
 import config as C
 from data.collect import collect_dataset
-from models.jepa import JEPA
+from models.jepa import JEPA, state_to_target
 from models.dataset import make_dataloaders
 from models.train import train_jepa, plot_history
 from eval.probe import run_probe, extract_latents, plot_latent_pca, plot_latent_probe_axes
@@ -59,6 +59,11 @@ def parse_args():
                    help="physics-consistency loss weight (the soft prior)")
     p.add_argument("--lock-pose", action="store_true", default=C.PHYSICS_LOCK_POSE,
                    help="hard architectural prior: MLP cannot touch dims 0,1,2")
+    # privileged state anchor (any predictor mode): pull dims 0..3 toward standardized pose
+    p.add_argument("--lam-anchor", type=float, default=0.0,
+                   help="privileged state anchor on the first 4 latent dims (standardized pose). 0 = off (pure SIGReg JEPA)")
+    p.add_argument("--lam-readout", type=float, default=0.0,
+                   help="privileged state via a LINEAR readout head over the whole latent (does not fight SIGReg; code stays distributed). 0 = off")
     # training
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
@@ -75,7 +80,8 @@ def parse_args():
 def build_model(a) -> JEPA:
     """A JEPA in the requested mode, with the physics dt matched to the horizon."""
     m = JEPA(grid_size=a.grid_size, latent_dim=a.latent_dim,
-             predictor_mode=a.predictor_mode, predictor_lock_pose=a.lock_pose)
+             predictor_mode=a.predictor_mode, predictor_lock_pose=a.lock_pose,
+             state_head=a.lam_readout > 0)
     m.predictor.dt = a.pred_step * C.DT   # physics integrates over the full horizon; no-op for mlp/residual
     return m
 
@@ -88,6 +94,8 @@ def main():
     if a.predictor_mode == "physics":
         if a.lam_phys > 0:  tag += f"_lp{a.lam_phys:g}"
         if a.lock_pose:     tag += "_lock"
+    if a.lam_anchor > 0:    tag += f"_anc{a.lam_anchor:g}"
+    if a.lam_readout > 0:   tag += f"_rd{a.lam_readout:g}"
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
     ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
@@ -104,10 +112,18 @@ def main():
 
     # train
     torch.manual_seed(C.SEED)
-    train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED, step=a.pred_step)
+    need_state = a.lam_anchor > 0 or a.lam_readout > 0   # privileged state loaded/standardized when supervising
+    train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
+                                        return_state=need_state, step=a.pred_step)
+    anchor_mean = anchor_std = None
+    if need_state:                    # fixed train-set stats so the standardized target is stable
+        T = state_to_target(torch.from_numpy(train_dl.dataset.states).float())
+        anchor_mean, anchor_std = T.mean(0), T.std(0) + 1e-6
     model = build_model(a)
     history = train_jepa(model, train_dl, val_dl, epochs=a.epochs, lr=a.lr, lam=a.lam,
-                         lam_phys=a.lam_phys, device=a.device, save_best_to=ckpt_path)
+                         lam_phys=a.lam_phys, lam_anchor=a.lam_anchor, lam_readout=a.lam_readout,
+                         anchor_mean=anchor_mean, anchor_std=anchor_std,
+                         device=a.device, save_best_to=ckpt_path)
     plot_history(history, save_to=report_dir / "training_curve.png")
 
     # reload the best-val checkpoint into a fresh model of the SAME mode (so the
@@ -118,6 +134,24 @@ def main():
     # probe (pass the model so it uses the right mode) and save the metrics table
     run_probe(model=eval_model, data_path=data_path, latent_dim=a.latent_dim,
               probe_epochs=a.probe_epochs, device=a.device, seed=C.SEED, save_dir=report_dir)
+
+    # anchored runs: per-dim correlation of the FIRST 4 dims with pose, so we can see
+    # whether the anchor actually pinned interpretable axes (d0~x d1~y d2~cos d3~sin) or
+    # whether SIGReg kept the code distributed despite it. Mirrors the ego per-dim block.
+    if need_state:
+        _, cdl = make_dataloaders(data_path, batch_size=256, seed=C.SEED, return_state=True, step=a.pred_step)
+        Zc, Sc = extract_latents(eval_model, cdl, a.device)
+        Tc = state_to_target(Sc)
+        Zc4 = Zc[:, :4] - Zc[:, :4].mean(0, keepdim=True)
+        print("\n-- per-dim correlation of latent dims 0..3 with pose (anchored) --")
+        with open(report_dir / "block_correlations.csv", "w", newline="") as f:
+            import csv as _csv
+            w = _csv.writer(f); w.writerow(["pose", "d0", "d1", "d2", "d3"])
+            for j, nm in enumerate(["x", "y", "cos_th", "sin_th"]):
+                tc = Tc[:, j] - Tc[:, j].mean()
+                corr = (Zc4 * tc.unsqueeze(1)).mean(0) / (Zc[:, :4].std(0) * Tc[:, j].std() + 1e-8)
+                print(f"  {nm:7s}  " + "  ".join(f"d{d}={corr[d]:+.2f}" for d in range(4)))
+                w.writerow([nm] + [f"{corr[d]:.4f}" for d in range(4)])
 
     # figures
     if not a.no_figures:
