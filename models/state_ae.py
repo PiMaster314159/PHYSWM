@@ -220,23 +220,41 @@ def _img_loss(pred: torch.Tensor, target: torch.Tensor, fg_weight: float = 0.0) 
 def ego_loss(out: dict, frame: torch.Tensor, next_frame: torch.Tensor,
              lam_dyn: float = 1.0, lam_pred: float = 1.0,
              lam_var: float = 0.0, var_gamma: float = 0.1,
-             recon_fg_weight: float = 0.0) -> tuple:
+             recon_fg_weight: float = 0.0, lam_recon: float = 1.0,
+             s_target: torch.Tensor = None, s_next_target: torch.Tensor = None,
+             lam_anchor: float = 0.0, lam_anchor_pred: float = 0.0) -> tuple:
     """recon (grounds state) + dyn (physics in state space) + pred_recon (predicted->pixels)
-    + an optional variance floor that forbids any state dim from going dead.
+    + an optional variance floor that forbids any state dim from going dead
+    + an optional supervised state anchor (privileged info: label-free at inference).
 
     The variance floor is the VICReg variance term: penalize a dim whose batch std drops
     below var_gamma. It is pure anti-collapse, it does NOT decorrelate the dims, so it
     keeps them interpretable, but it stops the encoder from zeroing out d0,d1 or caving
     the whole state to a constant under the collapse-prone dyn loss.
+
+    ANCHOR (lam_anchor > 0): pull the encoded state toward a true-pose target s_target
+    (=[x, y, cos th, sin th]) supplied only during training. This directly pins the 4
+    dims to metric pose, so heading no longer relies on the weak dynamics signal, and the
+    latent IS the state (no gauge freedom). s_next_target + lam_anchor_pred additionally
+    supervises the PREDICTED next state, forcing the predictor to be real dynamics. At
+    inference the encoder is camera-only; the anchor is a training-time crutch.
+    lam_recon scales the frame reconstruction so it can be dropped (lam_recon=0) once the
+    anchor, not the decoder, is the thing grounding the state.
     """
     recon = _img_loss(out["recon"], frame, recon_fg_weight)
     dyn   = F.mse_loss(out["s_pred"], out["s_next"].detach())
     pred  = _img_loss(out["pred_recon"], next_frame, recon_fg_weight)
     std   = (out["s"].var(0) + 1e-4).sqrt()                 # per-dim std over the batch (grad-safe)
     var   = F.relu(var_gamma - std).mean()                  # > 0 only for dims below the floor
-    total = recon + lam_dyn * dyn + lam_pred * pred + lam_var * var
+    anchor      = F.mse_loss(out["s"], s_target) if (lam_anchor > 0 and s_target is not None) \
+                  else torch.zeros((), device=out["s"].device)
+    anchor_pred = F.mse_loss(out["s_pred"], s_next_target) if (lam_anchor_pred > 0 and s_next_target is not None) \
+                  else torch.zeros((), device=out["s"].device)
+    total = (lam_recon * recon + lam_dyn * dyn + lam_pred * pred + lam_var * var
+             + lam_anchor * anchor + lam_anchor_pred * anchor_pred)
     parts = {"recon": recon.item(), "dyn": dyn.item(), "pred_recon": pred.item(),
-             "var": var.item(), "total": total.item()}
+             "var": var.item(), "anchor": anchor.item(), "anchor_pred": anchor_pred.item(),
+             "total": total.item()}
     return total, parts
 
 

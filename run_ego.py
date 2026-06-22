@@ -89,6 +89,22 @@ def probe_pose(Z_tr, T_tr, Z_va, S_va, hidden, device, epochs=120, bs=4096):
     }
 
 
+def direct_readout(Z: torch.Tensor, S: torch.Tensor) -> dict:
+    """Read the 4-dim latent DIRECTLY as pose (no probe). Only meaningful with the anchor,
+    which pins the latent to true [x,y,cos,sin]; without it the latent is in an arbitrary gauge.
+    """
+    th_pred = torch.atan2(Z[:, 3], Z[:, 2])
+    d   = th_pred - S[:, 2]
+    ang = torch.abs(torch.atan2(torch.sin(d), torch.cos(d)))
+    deg = 180.0 / torch.pi
+    return {
+        "theta_flip_pct": (ang > torch.pi / 2).float().mean().item() * 100.0,
+        "theta_mae_deg":  (ang.mean() * deg).item(),
+        "x_rmse": (Z[:, 0] - S[:, 0]).pow(2).mean().sqrt().item(),
+        "y_rmse": (Z[:, 1] - S[:, 1]).pow(2).mean().sqrt().item(),
+    }
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Train + evaluate the ego world model.")
     p.add_argument("--run", default=C.RUN, help="dataset name (.h5 stem); must already exist")
@@ -102,6 +118,9 @@ def parse_args():
     p.add_argument("--var-gamma", type=float, default=0.1, help="per-dim std floor for the variance term")
     p.add_argument("--decoder", default="mlp", choices=["broadcast", "mlp"], help="renderer: MLP (fast) or spatial-broadcast (slower, better at placing objects)")
     p.add_argument("--recon-fg-weight", type=float, default=5.0, help="foreground weighting of recon (bg_mean + w*fg_mean); stops the ~99%% black background from drowning the object. 0 = plain MSE")
+    p.add_argument("--lam-recon", type=float, default=1.0, help="weight on frame reconstruction; set 0 to drop the decoder grounding entirely (the anchor grounds instead)")
+    p.add_argument("--lam-anchor", type=float, default=0.0, help="privileged state anchor: pull encoded state toward true pose during training (camera-only at inference). 0 = off (pure label-free)")
+    p.add_argument("--lam-anchor-pred", type=float, default=0.0, help="also supervise the PREDICTED next state against true next pose (makes the predictor real dynamics)")
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
     p.add_argument("--batch-size", type=int, default=C.BATCH_SIZE)
@@ -117,9 +136,14 @@ def val_total(model, dl, device, a, max_batches=50):
     for i, b in enumerate(dl):
         if i >= max_batches:
             break
-        out = model(b["frame"].to(device), b["action"].to(device), b["next_frame"].to(device))
-        _, parts = ego_loss(out, b["frame"].to(device), b["next_frame"].to(device),
-                            a.lam_dyn, a.lam_pred, a.lam_var, a.var_gamma, a.recon_fg_weight)
+        frame, nxt = b["frame"].to(device), b["next_frame"].to(device)
+        out = model(frame, b["action"].to(device), nxt)
+        s_tgt = state_to_target(b["state"]).to(device) if "state" in b else None
+        s_next_tgt = state_to_target(b["next_state"]).to(device) if "next_state" in b else None
+        _, parts = ego_loss(out, frame, nxt, a.lam_dyn, a.lam_pred, a.lam_var, a.var_gamma,
+                            a.recon_fg_weight, lam_recon=a.lam_recon, s_target=s_tgt,
+                            s_next_target=s_next_tgt, lam_anchor=a.lam_anchor,
+                            lam_anchor_pred=a.lam_anchor_pred)
         tot.append(parts["total"])
     model.train()
     return sum(tot) / max(len(tot), 1)
@@ -132,6 +156,9 @@ def main():
     if a.lam_pred != 1.0:      tag += f"_lp{a.lam_pred:g}"
     if a.lam_var > 0:          tag += f"_v{a.lam_var:g}"     # mark the variance-floor runs
     if a.recon_fg_weight > 0:  tag += f"_fg{a.recon_fg_weight:g}"
+    if a.lam_recon != 1.0:     tag += f"_rec{a.lam_recon:g}"
+    if a.lam_anchor > 0:       tag += f"_anc{a.lam_anchor:g}"
+    if a.lam_anchor_pred > 0:  tag += f"_ancp{a.lam_anchor_pred:g}"
     if a.residual_budget > 0:  tag += f"_gray{a.residual_budget:g}"
     if a.learn_coeffs:         tag += "_learn"
     tag += "_bc" if a.decoder == "broadcast" else "_mlpdec"   # decoder in the name -> own folder
@@ -149,7 +176,9 @@ def main():
           f"residual_budget={a.residual_budget}")
 
     torch.manual_seed(C.SEED)
-    train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED, step=a.pred_step)
+    need_state = a.lam_anchor > 0 or a.lam_anchor_pred > 0   # privileged state only loaded when anchoring
+    train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
+                                        return_state=need_state, step=a.pred_step)
     model = EgoWorldModel(grid_size=a.grid_size, dt=a.pred_step * C.DT,
                           residual_budget=a.residual_budget, learn_coeffs=a.learn_coeffs,
                           decoder=a.decoder).to(a.device).train()
@@ -161,8 +190,12 @@ def main():
         for b in train_dl:
             frame, nxt = b["frame"].to(a.device), b["next_frame"].to(a.device)
             out = model(frame, b["action"].to(a.device), nxt)
+            s_tgt = state_to_target(b["state"]).to(a.device) if need_state else None
+            s_next_tgt = state_to_target(b["next_state"]).to(a.device) if need_state else None
             loss, parts = ego_loss(out, frame, nxt, a.lam_dyn, a.lam_pred,
-                                   a.lam_var, a.var_gamma, a.recon_fg_weight)
+                                   a.lam_var, a.var_gamma, a.recon_fg_weight,
+                                   lam_recon=a.lam_recon, s_target=s_tgt, s_next_target=s_next_tgt,
+                                   lam_anchor=a.lam_anchor, lam_anchor_pred=a.lam_anchor_pred)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             opt.step(); step += 1
@@ -176,6 +209,7 @@ def main():
                 train_hist.append(row)
                 print(f"  step {step:5d}  total {parts['total']:.4f}  recon {parts['recon']:.4f}  "
                       f"dyn {parts['dyn']:.4f}  pred_recon {parts['pred_recon']:.4f}  var {parts['var']:.4f}  "
+                      f"anchor {parts['anchor']:.4f}  "
                       f"std[{per_dim[0]:.2f} {per_dim[1]:.2f} {per_dim[2]:.2f} {per_dim[3]:.2f}]")
         v = val_total(model, val_dl, a.device, a)
         val_hist.append({"epoch": epoch + 1, "step": step, "val_total": v})
@@ -192,7 +226,7 @@ def main():
             for r in rows:
                 w.writerow([r[c] for c in cols])
     _write_csv(report_dir / "train_history.csv", train_hist,
-               ["step", "epoch", "total", "recon", "dyn", "pred_recon", "var",
+               ["step", "epoch", "total", "recon", "dyn", "pred_recon", "var", "anchor", "anchor_pred",
                 "a_v", "a_omega", "state_std", "std0", "std1", "std2", "std3"])
     _write_csv(report_dir / "val_history.csv", val_hist, ["epoch", "step", "val_total"])
     print(f"wrote train_history.csv ({len(train_hist)} rows) + val_history.csv")
@@ -207,6 +241,17 @@ def main():
 
     print(f"\nlearned gray-box coefficients: a_v={model.log_a_v.exp().item():.4f}  "
           f"a_omega={model.log_a_omega.exp().item():.4f}  (toy target ~1.0)")
+
+    if need_state:   # anchored: the latent IS pose, so read it straight off (camera-only, no probe)
+        dm = direct_readout(Z_va, S_va)
+        print("\n-- pose read DIRECTLY from the latent (no probe; camera-only inference) --")
+        print(f"  direct   theta_flip {dm['theta_flip_pct']:6.2f}  theta_mae {dm['theta_mae_deg']:6.2f}  "
+              f"x_rmse {dm['x_rmse']:.4f}  y_rmse {dm['y_rmse']:.4f}")
+        with open(report_dir / "state_direct.csv", "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["theta_flip_pct", "theta_mae_deg", "x_rmse", "y_rmse"])
+            w.writerow([f"{dm['theta_flip_pct']:.4f}", f"{dm['theta_mae_deg']:.4f}",
+                        f"{dm['x_rmse']:.4f}", f"{dm['y_rmse']:.4f}"])
 
     print("\n-- pose probed from the 4-dim ego state (gauge-invariant) --")
     rows = []
