@@ -17,6 +17,7 @@ import os
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import sys
+import argparse
 from pathlib import Path
 
 ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").exists())
@@ -36,10 +37,10 @@ from models.grounded import GroundedJEPA
 from models.state_ae import EgoWorldModel
 from eval.probe import extract_latents, make_linear_probe, train_probe, state_to_target
 
-RUN  = "run06_64x64_bignose"
 GRID = 64
-DATA = C.DATASETS_DIR / f"{RUN}.h5"
 CK   = C.CHECKPOINTS_DIR
+RUN  = "run06_64x64_bignose"   # overridden in main() from --run
+DATA = C.DATASETS_DIR / f"{RUN}.h5"
 
 
 def build_models():
@@ -94,6 +95,13 @@ def draw_row(axes_row, Z, S, fig, seed=0, epochs=80):
 
 
 def main():
+    global RUN, DATA
+    ap = argparse.ArgumentParser(description="4-way latent-probe-axes comparison.")
+    ap.add_argument("--run", default=RUN, help="dataset/checkpoint stem (e.g. run07_64x64_ring)")
+    a = ap.parse_args()
+    RUN  = a.run
+    DATA = C.DATASETS_DIR / f"{RUN}.h5"
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if not DATA.exists():
         raise SystemExit(f"dataset not found: {DATA}")

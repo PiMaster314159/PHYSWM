@@ -49,11 +49,19 @@ WORLD_BOUNDS = ((0.0, 1.0), (0.0, 1.0))  # ((x_min, x_max), (y_min, y_max))
 # "dot" = a bright disc near the nose, which makes the frame GRAYSCALE (body at
 # BODY_VALUE, dot at NOSE_VALUE). Like L/W this is baked into every frame, so a
 # change needs a fresh RUN + re-collection. Extend RENDER_MARKER for more cues.
-RENDER_MARKER = "none"   # "none" | "dot"
+RENDER_MARKER = "none"   # "none" | "dot" | "ring"
 BODY_VALUE    = 0.5      # triangle-body intensity when a marker is active
 NOSE_VALUE    = 1.0      # nose-dot intensity
 NOSE_RADIUS   = 0.03     # nose-dot radius in world units
 NOSE_OFFSET   = 0.5      # dot center as a fraction from centroid toward the apex
+# "ring" marker: a WHITE body with a thin GREY circle outline encircling the front
+# tip. A small, subtle heading cue (you still see the white apex, ringed by the grey
+# indicator), replacing the big nose blob that dominated the frame and confounded
+# position with heading.
+RING_VALUE     = 0.5     # grey ring intensity (body is rendered white = 1.0)
+RING_RADIUS    = 0.030   # ring radius in world units (circle around the leading edge)
+RING_THICKNESS = 0.016   # ring band thickness in world units (~1px at grid 64)
+RING_OFFSET    = 0.7     # ring center as a fraction from centroid toward the apex (white tip pokes through the front)
 
 # --- Data collection -------------------------------------------------------
 N_EPISODES = 5000

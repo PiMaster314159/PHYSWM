@@ -29,6 +29,7 @@ import numpy.typing as npt
 from config import (
     L, W, WORLD_BOUNDS,
     RENDER_MARKER, BODY_VALUE, NOSE_VALUE, NOSE_RADIUS, NOSE_OFFSET,
+    RING_VALUE, RING_RADIUS, RING_THICKNESS, RING_OFFSET,
 )
 
 
@@ -212,6 +213,10 @@ def render_frame(
     nose_value: float = NOSE_VALUE,
     nose_radius: float = NOSE_RADIUS,
     nose_offset: float = NOSE_OFFSET,
+    ring_value: float = RING_VALUE,
+    ring_radius: float = RING_RADIUS,
+    ring_thickness: float = RING_THICKNESS,
+    ring_offset: float = RING_OFFSET,
     dtype: npt.DTypeLike = np.uint8,
 ) -> np.ndarray:
     """Render the robot at `state` to a (grid_size x grid_size) frame.
@@ -265,15 +270,24 @@ def render_frame(
     if marker == "none":
         return inside.astype(dtype)
 
-    # grayscale: body at body_value, then overlay the (brighter) marker
-    frame = inside.astype(np.float32) * body_value
+    apex_x = 2.0 * L / 3.0                          # apex local x after centroid recenter
     if marker == "dot":
-        apex_x = 2.0 * L / 3.0                      # apex local x after centroid recenter
+        # grayscale body at body_value, then overlay the (brighter) nose disc
+        frame  = inside.astype(np.float32) * body_value
         cx     = nose_offset * apex_x               # dot center along the heading axis
         d2     = (centers_local[..., 0] - cx) ** 2 + centers_local[..., 1] ** 2
         frame[d2 <= nose_radius ** 2] = nose_value  # disc, rotates with the body frame
+    elif marker == "ring":
+        # WHITE body, with a thin GREY circle outline encircling the front tip. The ring
+        # is centered ring_offset of the way to the apex (1.0 = the tip) and rotates with
+        # the body, so the heading reads off the small ring around the visible white point.
+        frame  = inside.astype(np.float32)          # white body (=1.0)
+        cx     = ring_offset * apex_x
+        d      = np.sqrt((centers_local[..., 0] - cx) ** 2 + centers_local[..., 1] ** 2)
+        ring   = np.abs(d - ring_radius) <= (ring_thickness / 2.0)
+        frame[ring] = ring_value                    # grey annulus, on body and background alike
     else:
-        raise ValueError(f"unknown marker {marker!r} (expected 'none' or 'dot')")
+        raise ValueError(f"unknown marker {marker!r} (expected 'none', 'dot', or 'ring')")
     return frame.astype(np.float32)
 
 

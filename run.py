@@ -47,7 +47,7 @@ def parse_args():
     # dataset
     p.add_argument("--run", default=C.RUN, help="dataset name (.h5 stem)")
     p.add_argument("--grid-size", type=int, default=C.GRID_SIZE)
-    p.add_argument("--nose-marker", default=C.RENDER_MARKER, choices=["none", "dot"],
+    p.add_argument("--nose-marker", default=C.RENDER_MARKER, choices=["none", "dot", "ring"],
                    help="heading cue baked into a freshly collected dataset (grayscale if set)")
     # model + horizon (the usual sweep axes)
     p.add_argument("--predictor-mode", default=C.PREDICTOR_MODE,
