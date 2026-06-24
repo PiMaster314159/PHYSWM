@@ -61,7 +61,7 @@ NOSE_OFFSET   = 0.5      # dot center as a fraction from centroid toward the ape
 RING_VALUE     = 0.5     # grey ring intensity (body is rendered white = 1.0)
 RING_RADIUS    = 0.030   # ring radius in world units (circle around the leading edge)
 RING_THICKNESS = 0.016   # ring band thickness in world units (~1px at grid 64)
-RING_OFFSET    = 0.7     # ring center as a fraction from centroid toward the apex (white tip pokes through the front)
+RING_OFFSET    = 1     # ring center as a fraction from centroid toward the apex (white tip pokes through the front)
 
 # --- Data collection -------------------------------------------------------
 N_EPISODES = 5000
