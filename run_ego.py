@@ -22,6 +22,7 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").ex
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import h5py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -241,6 +242,18 @@ def main():
 
     print(f"\nlearned gray-box coefficients: a_v={model.log_a_v.exp().item():.4f}  "
           f"a_omega={model.log_a_omega.exp().item():.4f}  (toy target ~1.0)")
+
+    # actuator-recovery readout: compare the learned a_v to the dataset's TRUE actuator gain
+    # (the commanded->applied speed ratio baked into the data). With learnable coefficients
+    # the gray-box a_v should land on this number, recovering the unmodeled actuator loss.
+    with h5py.File(data_path, "r") as _f:
+        true_gain = float(_f.attrs.get("actuator_gain", 1.0))
+    learned_av = model.log_a_v.exp().item()
+    print(f"actuator recovery: true gain={true_gain:.3f}  ->  learned a_v={learned_av:.4f}  "
+          f"(abs error {abs(learned_av - true_gain):.4f})")
+    with open(report_dir / "actuator_recovery.csv", "w", newline="") as _fc:
+        _w = csv.writer(_fc); _w.writerow(["true_gain", "learned_a_v", "a_omega"])
+        _w.writerow([f"{true_gain:.4f}", f"{learned_av:.4f}", f"{model.log_a_omega.exp().item():.4f}"])
 
     if need_state:   # anchored: the latent IS pose, so read it straight off (camera-only, no probe)
         dm = direct_readout(Z_va, S_va)

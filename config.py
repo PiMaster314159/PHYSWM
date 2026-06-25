@@ -76,6 +76,13 @@ V_STD = 0.05       # linear-velocity spread
 OMEGA_MEAN = 0.0   # mean angular velocity (no turn bias)
 OMEGA_STD = 0.6    # angular-velocity spread
 
+# --- Actuator model (deliberately UNMODELED effect for the gray-box test) ---
+# The commanded speed is not fully applied: the collector STORES the commanded v as
+# the action but STEPS the sim with ACTUATOR_GAIN * v (a fixed, unknown efficiency).
+# The model is given the command and must recover the gain as its learnable a_v
+# coefficient. 1.0 = a perfect actuator, which reproduces the original datasets exactly.
+ACTUATOR_GAIN = 1.0
+
 # --- Model architecture ----------------------------------------------------
 IN_CHANNELS      = 1
 LATENT_DIM       = 128

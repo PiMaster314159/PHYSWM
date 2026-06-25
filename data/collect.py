@@ -41,6 +41,7 @@ from typing import Optional, Union
 from config import (
     DT, WORLD_BOUNDS, V_MEAN, V_STD, OMEGA_MEAN, OMEGA_STD,
     GRID_SIZE, HOLD_K, MAX_STEPS, N_EPISODES, SEED, RENDER_MARKER, NOSE_RADIUS,
+    ACTUATOR_GAIN,
 )
 from sim.render import render_frame
 from sim.environment import env_step, bounding_radius
@@ -180,6 +181,7 @@ def run_episode(
     omega_std: float = OMEGA_STD,
     marker: str = RENDER_MARKER,
     nose_radius: float = NOSE_RADIUS,
+    actuator_gain: float = 1.0,
 ) -> tuple:
     """Run one random-action episode.
 
@@ -243,10 +245,15 @@ def run_episode(
         if steps_held >= hold_k:
             action = sample_action(rng, v_mean, v_std, omega_mean, omega_std)
             steps_held = 0
-        actions.append(action)
+        actions.append(action)              # store the COMMANDED action (what we think we sent)
         steps_held += 1
 
-        next_state, done = env_step(state, action, dt=dt, world_bounds=world_bounds)
+        # actuator resistance: the sim applies a scaled speed (actuator_gain * v). The
+        # stored action keeps the full commanded v, so the model sees the command and must
+        # recover the gain. gain=1.0 leaves env_step's input byte-identical to before.
+        applied = action.copy()
+        applied[0] = action[0] * actuator_gain
+        next_state, done = env_step(state, applied, dt=dt, world_bounds=world_bounds)
         if done:
             termination = "wall"
             break
@@ -332,6 +339,7 @@ def collect_dataset(
     seed: int = SEED,
     marker: str = RENDER_MARKER,
     nose_radius: float = NOSE_RADIUS,
+    actuator_gain: float = ACTUATOR_GAIN,
     progress_every: int = 100,
 ) -> None:
     """Stream `n_episodes` random-action episodes to an HDF5 file.
@@ -410,6 +418,7 @@ def collect_dataset(
                 v_mean=v_mean, v_std=v_std,
                 omega_mean=omega_mean, omega_std=omega_std,
                 marker=marker, nose_radius=nose_radius,
+                actuator_gain=actuator_gain,
             )
             if len(states) < min_length:
                 continue
@@ -442,6 +451,7 @@ def collect_dataset(
         f.attrs["seed"] = seed
         f.attrs["render_marker"] = marker
         f.attrs["nose_radius"] = nose_radius
+        f.attrs["actuator_gain"] = actuator_gain   # truth for the gray-box test: model's a_v should recover this
         f.attrs["v_mean"] = v_mean
         f.attrs["v_std"] = v_std
         f.attrs["omega_mean"] = omega_mean
