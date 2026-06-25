@@ -106,6 +106,30 @@ def direct_readout(Z: torch.Tensor, S: torch.Tensor) -> dict:
     }
 
 
+@torch.no_grad()
+def predict_eval(model, dl, device):
+    """One-step prediction error: step(encode(frame_t), action_t) vs TRUE next pose.
+
+    This tests the DYNAMICS (and the gray-box a_v), which pose recovery does NOT: pose is
+    read straight from the frame by the anchor, so a wrong a_v leaves pose untouched and
+    only shows up here, in how well the model PREDICTS the next state from the action.
+    Compare pred_pos_err to the single-frame perception floor (the direct readout): if the
+    prediction is close to it the dynamics is sound; if it is much larger, the dynamics
+    (e.g. a frozen/wrong a_v) is adding error.
+    """
+    model.eval()
+    pe_sum, he_sum, n = 0.0, 0.0, 0
+    for b in dl:
+        s      = model.encode(b["frame"].to(device))
+        s_pred = model.step(s, b["action"].to(device))
+        tgt    = state_to_target(b["next_state"]).to(device)
+        pe = (s_pred[:, :2] - tgt[:, :2]).pow(2).sum(1).sqrt()                 # euclidean position error
+        d  = torch.atan2(s_pred[:, 3], s_pred[:, 2]) - torch.atan2(tgt[:, 3], tgt[:, 2])
+        he = torch.abs(torch.atan2(torch.sin(d), torch.cos(d)))               # wrapped heading error
+        pe_sum += pe.sum().item(); he_sum += he.sum().item(); n += pe.numel()
+    return pe_sum / n, (he_sum / n) * 180.0 / torch.pi
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Train + evaluate the ego world model.")
     p.add_argument("--run", default=C.RUN, help="dataset name (.h5 stem); must already exist")
@@ -286,6 +310,15 @@ def main():
     for j, nm in enumerate(["x", "y", "cos_th", "sin_th"]):
         corr = pearson_per_dim(Z_va, T_va[:, j])
         print(f"  {nm:7s}  " + "  ".join(f"d{d}={corr[d]:+.2f}" for d in range(STATE_DIM)))
+
+    # dynamics test: how well does step(encode(frame), action) predict the next pose?
+    pred_pos_err, pred_theta_mae = predict_eval(model, va_dl, a.device)
+    print("\n-- 1-step prediction (dynamics: step(encode(frame), action) vs true next pose) --")
+    print(f"  predict  pos_err {pred_pos_err:.4f}  theta_mae {pred_theta_mae:.2f}   "
+          f"(compare pos_err to the direct readout above = single-frame perception floor)")
+    with open(report_dir / "predict_eval.csv", "w", newline="") as _fp:
+        _w = csv.writer(_fp); _w.writerow(["pred_pos_err", "pred_theta_mae_deg"])
+        _w.writerow([f"{pred_pos_err:.4f}", f"{pred_theta_mae:.4f}"])
 
     print(f"\ndone -> {report_dir}")
 
