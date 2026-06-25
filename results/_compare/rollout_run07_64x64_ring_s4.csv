@@ -1,0 +1,53 @@
+model,horizon_transitions,horizon_simsteps,pos_err,theta_mae_deg
+ego (learnable a_v),0,0,0.1844,7.8284
+ego (learnable a_v),1,4,0.1691,7.3773
+ego (learnable a_v),2,8,0.1604,7.0538
+ego (learnable a_v),3,12,0.1532,7.1866
+ego (learnable a_v),4,16,0.1495,7.6819
+ego (learnable a_v),5,20,0.1518,8.3821
+ego (learnable a_v),6,24,0.1496,8.9083
+ego (learnable a_v),7,28,0.1439,9.0600
+ego (learnable a_v),8,32,0.1440,9.9361
+ego (learnable a_v),9,36,0.1675,11.4804
+ego (learnable a_v),10,40,0.1738,11.0390
+ego (learnable a_v),11,44,0.1719,10.5567
+ego (learnable a_v),12,48,0.1785,10.8445
+residual JEPA + anchor,0,0,0.1545,7.9270
+residual JEPA + anchor,1,4,0.1247,7.4275
+residual JEPA + anchor,2,8,0.1390,7.6767
+residual JEPA + anchor,3,12,0.1601,9.1064
+residual JEPA + anchor,4,16,0.1659,10.1642
+residual JEPA + anchor,5,20,0.1625,10.7723
+residual JEPA + anchor,6,24,0.1655,11.9204
+residual JEPA + anchor,7,28,0.1791,12.5870
+residual JEPA + anchor,8,32,0.2158,14.5713
+residual JEPA + anchor,9,36,0.2430,17.2869
+residual JEPA + anchor,10,40,0.2578,22.4158
+residual JEPA + anchor,11,44,0.2794,23.0492
+residual JEPA + anchor,12,48,0.3178,26.9450
+residual JEPA + readout,0,0,0.0772,3.0398
+residual JEPA + readout,1,4,0.0704,4.1015
+residual JEPA + readout,2,8,0.0984,5.4256
+residual JEPA + readout,3,12,0.1272,5.9808
+residual JEPA + readout,4,16,0.1659,7.5144
+residual JEPA + readout,5,20,0.1918,8.4868
+residual JEPA + readout,6,24,0.1926,10.5308
+residual JEPA + readout,7,28,0.2131,10.3941
+residual JEPA + readout,8,32,0.2335,11.3813
+residual JEPA + readout,9,36,0.2491,10.0094
+residual JEPA + readout,10,40,0.2982,13.1425
+residual JEPA + readout,11,44,0.3324,17.3486
+residual JEPA + readout,12,48,0.3633,17.2800
+grounded + block anchor,0,0,0.0610,9.2570
+grounded + block anchor,1,4,0.0591,9.2012
+grounded + block anchor,2,8,0.0654,9.8453
+grounded + block anchor,3,12,0.0781,10.9425
+grounded + block anchor,4,16,0.0782,11.0140
+grounded + block anchor,5,20,0.0904,11.5020
+grounded + block anchor,6,24,0.1058,11.5932
+grounded + block anchor,7,28,0.1127,11.0424
+grounded + block anchor,8,32,0.1253,10.0048
+grounded + block anchor,9,36,0.1514,12.9918
+grounded + block anchor,10,40,0.1481,11.9857
+grounded + block anchor,11,44,0.1639,9.5259
+grounded + block anchor,12,48,0.1640,17.4344

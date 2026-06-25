@@ -80,16 +80,19 @@ def load_val_episodes(data_path, seed, n_eps, val_frac=0.1):
     return eps
 
 
-@torch.no_grad()
 def fit_probe(model, episodes, device, max_frames=4000):
-    """Fit a fixed linear probe z -> pose on the ENCODED frames (the decoder for rollout)."""
+    """Fit a fixed linear probe z -> pose on the ENCODED frames (the decoder for rollout).
+
+    Only the encoding is under no_grad; the probe itself must train with grad enabled.
+    """
     F = np.concatenate([ep[0] for ep in episodes])
     S = np.concatenate([ep[2] for ep in episodes])
     if len(F) > max_frames:
         sel = np.random.default_rng(0).choice(len(F), max_frames, replace=False)
         F, S = F[sel], S[sel]
     Ft = torch.from_numpy(F).float().unsqueeze(1).to(device)
-    Z = torch.cat([model.encode(Ft[i:i + 512]).cpu() for i in range(0, len(Ft), 512)])
+    with torch.no_grad():
+        Z = torch.cat([model.encode(Ft[i:i + 512]).cpu() for i in range(0, len(Ft), 512)])
     T = state_to_target(torch.from_numpy(S).float())
     probe = train_probe(make_linear_probe(Z.shape[1]), Z, T, epochs=120, device=device)
     return probe.to(device).eval()
