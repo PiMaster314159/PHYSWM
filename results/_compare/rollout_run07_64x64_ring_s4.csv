@@ -6,48 +6,48 @@ ego (learnable a_v),3,12,0.0389,2.7058
 ego (learnable a_v),4,16,0.0430,2.6696
 ego (learnable a_v),5,20,0.0481,2.7528
 ego (learnable a_v),6,24,0.0510,3.1221
-ego (learnable a_v),7,28,0.0537,3.3150
+ego (learnable a_v),7,28,0.0537,3.3149
 ego (learnable a_v),8,32,0.0614,3.2839
 ego (learnable a_v),9,36,0.0679,3.4994
 ego (learnable a_v),10,40,0.0685,3.0917
 ego (learnable a_v),11,44,0.0674,3.3292
 ego (learnable a_v),12,48,0.0731,4.2287
-residual JEPA + anchor,0,0,0.1780,10.1964
-residual JEPA + anchor,1,4,0.1626,9.2222
-residual JEPA + anchor,2,8,0.1709,8.9496
-residual JEPA + anchor,3,12,0.1987,9.4428
-residual JEPA + anchor,4,16,0.2112,11.0125
-residual JEPA + anchor,5,20,0.2284,11.2761
-residual JEPA + anchor,6,24,0.2576,14.1818
-residual JEPA + anchor,7,28,0.2775,15.1227
-residual JEPA + anchor,8,32,0.2999,15.2674
-residual JEPA + anchor,9,36,0.3210,17.8104
-residual JEPA + anchor,10,40,0.2937,23.2813
-residual JEPA + anchor,11,44,0.3219,24.4398
-residual JEPA + anchor,12,48,0.3681,26.6499
-residual JEPA + readout,0,0,0.1421,3.3482
-residual JEPA + readout,1,4,0.1371,4.2808
-residual JEPA + readout,2,8,0.1633,5.7216
-residual JEPA + readout,3,12,0.1829,6.9243
-residual JEPA + readout,4,16,0.2139,7.9179
-residual JEPA + readout,5,20,0.2451,9.0973
-residual JEPA + readout,6,24,0.2488,10.0156
-residual JEPA + readout,7,28,0.2168,9.6404
-residual JEPA + readout,8,32,0.2067,11.2376
-residual JEPA + readout,9,36,0.2305,8.9631
-residual JEPA + readout,10,40,0.2918,12.8034
-residual JEPA + readout,11,44,0.3108,20.1894
-residual JEPA + readout,12,48,0.3407,18.1888
-grounded + block anchor,0,0,0.0213,2.8184
-grounded + block anchor,1,4,0.0220,2.8184
-grounded + block anchor,2,8,0.0234,2.8184
-grounded + block anchor,3,12,0.0240,2.7335
-grounded + block anchor,4,16,0.0250,2.7414
-grounded + block anchor,5,20,0.0283,2.9189
-grounded + block anchor,6,24,0.0323,3.0939
-grounded + block anchor,7,28,0.0376,3.2010
-grounded + block anchor,8,32,0.0368,2.9614
-grounded + block anchor,9,36,0.0384,2.5411
-grounded + block anchor,10,40,0.0413,2.3451
-grounded + block anchor,11,44,0.0471,2.3711
-grounded + block anchor,12,48,0.0525,2.4393
+residual JEPA + anchor,0,0,0.2279,11.2441
+residual JEPA + anchor,1,4,0.2049,9.9415
+residual JEPA + anchor,2,8,0.2058,8.7437
+residual JEPA + anchor,3,12,0.2377,10.5046
+residual JEPA + anchor,4,16,0.2569,12.0859
+residual JEPA + anchor,5,20,0.2601,12.0121
+residual JEPA + anchor,6,24,0.2804,12.2779
+residual JEPA + anchor,7,28,0.2974,14.0237
+residual JEPA + anchor,8,32,0.3250,14.1888
+residual JEPA + anchor,9,36,0.3432,18.6041
+residual JEPA + anchor,10,40,0.3312,26.5913
+residual JEPA + anchor,11,44,0.3446,24.3682
+residual JEPA + anchor,12,48,0.3529,30.9722
+residual JEPA + readout,0,0,0.1195,3.6669
+residual JEPA + readout,1,4,0.1104,4.5734
+residual JEPA + readout,2,8,0.1318,5.3336
+residual JEPA + readout,3,12,0.1542,7.0634
+residual JEPA + readout,4,16,0.1816,8.4373
+residual JEPA + readout,5,20,0.2012,8.9106
+residual JEPA + readout,6,24,0.2048,9.9523
+residual JEPA + readout,7,28,0.1979,10.5648
+residual JEPA + readout,8,32,0.2035,13.2189
+residual JEPA + readout,9,36,0.2469,9.9672
+residual JEPA + readout,10,40,0.2656,11.3490
+residual JEPA + readout,11,44,0.2774,14.1258
+residual JEPA + readout,12,48,0.2880,13.4427
+grounded (locked gain),0,0,0.0213,2.8184
+grounded (locked gain),1,4,0.0220,2.8184
+grounded (locked gain),2,8,0.0234,2.8184
+grounded (locked gain),3,12,0.0240,2.7335
+grounded (locked gain),4,16,0.0250,2.7414
+grounded (locked gain),5,20,0.0283,2.9189
+grounded (locked gain),6,24,0.0323,3.0939
+grounded (locked gain),7,28,0.0376,3.2010
+grounded (locked gain),8,32,0.0368,2.9614
+grounded (locked gain),9,36,0.0384,2.5411
+grounded (locked gain),10,40,0.0413,2.3451
+grounded (locked gain),11,44,0.0471,2.3711
+grounded (locked gain),12,48,0.0525,2.4393

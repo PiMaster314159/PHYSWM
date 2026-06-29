@@ -225,6 +225,9 @@ def main():
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
     best, step = float("inf"), 0
     train_hist, val_hist = [], []
+    # the latent is anchored (so the direct readout is meaningful) whenever we supervise pose:
+    # single-step anchors, OR rollout mode which anchors every rolled step.
+    need_state = a.lam_anchor > 0 or a.lam_anchor_pred > 0 or a.rollout_k > 1
 
     def _write_csv(path, rows, cols):
         with open(path, "w", newline="") as f:

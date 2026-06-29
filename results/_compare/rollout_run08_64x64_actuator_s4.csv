@@ -12,42 +12,55 @@ ego (learnable a_v),9,36,0.0533,3.2671
 ego (learnable a_v),10,40,0.0578,3.3792
 ego (learnable a_v),11,44,0.0627,3.4692
 ego (learnable a_v),12,48,0.0685,3.4807
-residual JEPA + anchor,0,0,0.1797,7.7332
-residual JEPA + anchor,1,4,0.1702,7.6596
-residual JEPA + anchor,2,8,0.1764,7.8627
-residual JEPA + anchor,3,12,0.1939,7.8546
-residual JEPA + anchor,4,16,0.2163,8.6545
-residual JEPA + anchor,5,20,0.2366,9.4671
-residual JEPA + anchor,6,24,0.2582,10.2870
-residual JEPA + anchor,7,28,0.2799,11.1079
-residual JEPA + anchor,8,32,0.2805,12.9724
-residual JEPA + anchor,9,36,0.3216,12.9873
-residual JEPA + anchor,10,40,0.3543,14.9996
-residual JEPA + anchor,11,44,0.3802,14.7123
-residual JEPA + anchor,12,48,0.4078,15.5717
-residual JEPA + readout,0,0,0.1624,2.7646
-residual JEPA + readout,1,4,0.1723,3.3103
-residual JEPA + readout,2,8,0.1865,4.4809
-residual JEPA + readout,3,12,0.2144,5.6294
-residual JEPA + readout,4,16,0.2287,5.9505
-residual JEPA + readout,5,20,0.2358,7.0693
-residual JEPA + readout,6,24,0.2287,7.7453
-residual JEPA + readout,7,28,0.2294,8.3674
-residual JEPA + readout,8,32,0.2269,9.5493
-residual JEPA + readout,9,36,0.2211,9.9418
-residual JEPA + readout,10,40,0.2231,11.2184
-residual JEPA + readout,11,44,0.2510,11.0291
-residual JEPA + readout,12,48,0.2860,12.4865
-grounded + block anchor,0,0,0.0225,2.6384
-grounded + block anchor,1,4,0.0196,2.6384
-grounded + block anchor,2,8,0.0333,2.6384
-grounded + block anchor,3,12,0.0534,2.6921
-grounded + block anchor,4,16,0.0734,2.7010
-grounded + block anchor,5,20,0.0944,2.7691
-grounded + block anchor,6,24,0.1157,2.7692
-grounded + block anchor,7,28,0.1375,2.9498
-grounded + block anchor,8,32,0.1566,2.8920
-grounded + block anchor,9,36,0.1779,3.0706
-grounded + block anchor,10,40,0.1959,3.1139
-grounded + block anchor,11,44,0.2152,3.1540
-grounded + block anchor,12,48,0.2350,3.2549
+residual JEPA + anchor,0,0,0.1640,9.7848
+residual JEPA + anchor,1,4,0.1567,9.1836
+residual JEPA + anchor,2,8,0.1634,8.9317
+residual JEPA + anchor,3,12,0.1834,9.7752
+residual JEPA + anchor,4,16,0.2050,10.5829
+residual JEPA + anchor,5,20,0.2215,11.0479
+residual JEPA + anchor,6,24,0.2350,11.7060
+residual JEPA + anchor,7,28,0.2460,13.4988
+residual JEPA + anchor,8,32,0.2383,14.5050
+residual JEPA + anchor,9,36,0.2688,14.3919
+residual JEPA + anchor,10,40,0.3176,17.3430
+residual JEPA + anchor,11,44,0.3477,18.6995
+residual JEPA + anchor,12,48,0.3792,17.6714
+residual JEPA + readout,0,0,0.1397,2.8264
+residual JEPA + readout,1,4,0.1523,3.2219
+residual JEPA + readout,2,8,0.1673,4.1986
+residual JEPA + readout,3,12,0.1881,6.0224
+residual JEPA + readout,4,16,0.1968,6.9888
+residual JEPA + readout,5,20,0.2055,8.4521
+residual JEPA + readout,6,24,0.2120,8.6062
+residual JEPA + readout,7,28,0.2087,7.9532
+residual JEPA + readout,8,32,0.2105,9.5781
+residual JEPA + readout,9,36,0.2160,9.4235
+residual JEPA + readout,10,40,0.2186,10.4044
+residual JEPA + readout,11,44,0.2377,10.3383
+residual JEPA + readout,12,48,0.2640,12.4859
+grounded (locked gain),0,0,0.0225,2.6384
+grounded (locked gain),1,4,0.0196,2.6384
+grounded (locked gain),2,8,0.0333,2.6384
+grounded (locked gain),3,12,0.0534,2.6921
+grounded (locked gain),4,16,0.0734,2.7010
+grounded (locked gain),5,20,0.0944,2.7691
+grounded (locked gain),6,24,0.1157,2.7692
+grounded (locked gain),7,28,0.1375,2.9498
+grounded (locked gain),8,32,0.1566,2.8920
+grounded (locked gain),9,36,0.1779,3.0706
+grounded (locked gain),10,40,0.1959,3.1139
+grounded (locked gain),11,44,0.2152,3.1540
+grounded (locked gain),12,48,0.2350,3.2549
+grounded (learnable gain),0,0,0.0190,2.6168
+grounded (learnable gain),1,4,0.0177,2.6168
+grounded (learnable gain),2,8,0.0192,2.6168
+grounded (learnable gain),3,12,0.0230,2.6497
+grounded (learnable gain),4,16,0.0286,2.4977
+grounded (learnable gain),5,20,0.0348,2.5640
+grounded (learnable gain),6,24,0.0423,2.7047
+grounded (learnable gain),7,28,0.0494,2.7511
+grounded (learnable gain),8,32,0.0562,2.8383
+grounded (learnable gain),9,36,0.0635,3.0946
+grounded (learnable gain),10,40,0.0703,3.2543
+grounded (learnable gain),11,44,0.0760,3.2421
+grounded (learnable gain),12,48,0.0830,3.0552

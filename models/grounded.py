@@ -166,12 +166,16 @@ class GroundedPredictor(nn.Module):
         self.block_budget = block_budget
         # gray-box speed/turn scales on the block kinematics. Learnable lets the block
         # absorb an unmodeled actuator gain (else locked at 1 = pure known kinematics).
+        # Learn the SPEED scale a_v only (it absorbs the actuator gain). a_omega stays LOCKED:
+        # the locked rotation is what grounds heading, and unlike the ego model the grounded
+        # JEPA has no anchor_pred to constrain a learnable a_omega, so making it learnable lets
+        # the encoder and a_omega collude into an under-rotating escape hatch (heading collapses).
+        # Locked gains are the constant 1.0, non-persistent so they stay out of the checkpoint.
         if learn_coeffs:
-            self.log_a_v     = nn.Parameter(torch.zeros(()))
-            self.log_a_omega = nn.Parameter(torch.zeros(()))
+            self.log_a_v = nn.Parameter(torch.zeros(()))
         else:
-            self.register_buffer("log_a_v",     torch.zeros(()))
-            self.register_buffer("log_a_omega", torch.zeros(()))
+            self.register_buffer("log_a_v", torch.zeros(()), persistent=False)
+        self.register_buffer("log_a_omega", torch.zeros(()), persistent=False)
         self.net = nn.Sequential(
             nn.Linear(latent_dim + action_dim, hidden),
             nn.ReLU(inplace=True),
