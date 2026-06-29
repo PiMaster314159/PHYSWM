@@ -48,9 +48,12 @@ def build_models(run, step, epochs):
     jepa_res_rd  = JEPA(grid_size=GRID, latent_dim=128, predictor_mode="residual", state_head=True)
     jepa_res_anc.predictor.dt = dt; jepa_res_rd.predictor.dt = dt
     return [
-        ("ego (learnable a_v)",
+        ("ego (single-step, a_v~0.79)",
          EgoWorldModel(grid_size=GRID, dt=dt, residual_budget=0.0, learn_coeffs=True, decoder="mlp"),
          CK / f"{run}_ego_s{step}_e{epochs}_fg5_anc1_ancp1_learn_mlpdec.pt", "direct"),
+        ("ego (rollout-trained, a_v~0.70)",
+         EgoWorldModel(grid_size=GRID, dt=dt, residual_budget=0.0, learn_coeffs=True, decoder="mlp"),
+         CK / f"{run}_ego_s{step}_e{epochs}_v1_fg5_anc1_roll6_learn_mlpdec.pt", "direct"),
         ("residual JEPA + anchor", jepa_res_anc,
          CK / f"{run}_residual_s{step}_e{epochs}_anc1.pt", "probe"),
         ("residual JEPA + readout", jepa_res_rd,
