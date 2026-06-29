@@ -64,7 +64,7 @@ RING_THICKNESS = 0.016   # ring band thickness in world units (~1px at grid 64)
 RING_OFFSET    = 1     # ring center as a fraction from centroid toward the apex (white tip pokes through the front)
 
 # --- Data collection -------------------------------------------------------
-N_EPISODES = 5000
+N_EPISODES = 20000
 MAX_STEPS  = 100
 HOLD_K     = 4
 GRID_SIZE  = 128        # render resolution; must match the dataset's stored grid_size
