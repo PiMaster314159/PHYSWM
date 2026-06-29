@@ -222,6 +222,81 @@ def make_rollout_dataloaders(
     return train_dl, val_dl
 
 
+class HistoryTransitions(Dataset):
+    """Like RobotTransitions but each example carries a STACK of `stack` frames (at stride
+    `step`) ending at frame_t, plus the same stack ending at frame_{t+step}. The encoder reads
+    pose off the newest frame and the hidden gain off the motion across the stack. Also returns
+    the true (x,y,theta) for t and t+step, and the per-episode `gain` (the hidden parameter)."""
+
+    def __init__(self, h5_path, episodes=None, stack: int = 4, step: int = PRED_STEP):
+        with h5py.File(h5_path, "r") as f:
+            self.frames  = f["frames"][:]
+            self.actions = f["actions"][:]
+            self.states  = f["states"][:]
+            self.gains   = f["gains"][:] if "gains" in f else None
+            starts  = f["episode_starts"][:]
+            lengths = f["episode_lengths"][:]
+            self.grid_size = int(f.attrs["grid_size"])
+            hold_k = int(f.attrs["hold_k"])
+        if step > 1 and hold_k % step != 0:
+            raise ValueError(f"step {step} must divide hold_k {hold_k}")
+        if episodes is not None:
+            episodes = np.asarray(episodes, dtype=np.int64)
+            starts, lengths = starts[episodes], lengths[episodes]
+        self.stack, self.step = stack, step
+        need = (stack - 1) * step                       # history needed before frame_t
+        chunks = []
+        for s, n in zip(starts, lengths):
+            lo, hi = int(s) + need, int(s) + n - 1 - step   # t needs both history and a successor
+            if hi >= lo:
+                chunks.append(np.arange(lo, hi + 1, step))
+        self.index = np.concatenate(chunks) if chunks else np.empty(0, dtype=np.int64)
+
+    def __len__(self) -> int:
+        return len(self.index)
+
+    def _stack_at(self, end: int) -> torch.Tensor:
+        step, K = self.step, self.stack
+        frs = [self.frames[end - (K - 1 - k) * step] for k in range(K)]   # oldest .. newest(end)
+        return torch.from_numpy(np.stack(frs)).to(torch.float32)          # (stack, H, W)
+
+    def __getitem__(self, idx: int) -> dict:
+        i, step = int(self.index[idx]), self.step
+        sample = {
+            "frame":      self._stack_at(i),
+            "next_frame": self._stack_at(i + step),
+            "action":     torch.from_numpy(self.actions[i]).to(torch.float32),
+            "state":      torch.from_numpy(self.states[i]).to(torch.float32),
+            "next_state": torch.from_numpy(self.states[i + step]).to(torch.float32),
+        }
+        if self.gains is not None:
+            sample["gain"] = torch.tensor([float(self.gains[i])], dtype=torch.float32)   # (1,)
+        return sample
+
+
+def make_history_dataloaders(
+    h5_path: Union[str, Path],
+    batch_size: int = BATCH_SIZE,
+    val_frac: float = 0.1,
+    seed: int = SEED,
+    stack: int = 4,
+    num_workers: int = 0,
+    step: int = PRED_STEP,
+) -> tuple:
+    """Train/val frame-stack loaders with the SAME episode-level split as make_dataloaders."""
+    with h5py.File(h5_path, "r") as f:
+        n_ep = len(f["episode_starts"])
+    rng   = np.random.default_rng(seed)
+    perm  = rng.permutation(n_ep)
+    n_val = int(round(val_frac * n_ep))
+    val_ep, train_ep = perm[:n_val], perm[n_val:]
+    train_ds = HistoryTransitions(h5_path, episodes=train_ep, stack=stack, step=step)
+    val_ds   = HistoryTransitions(h5_path, episodes=val_ep,   stack=stack, step=step)
+    train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=num_workers)
+    val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    return train_dl, val_dl
+
+
 def make_dataloaders(
     h5_path: Union[str, Path],
     batch_size: int = BATCH_SIZE,
