@@ -111,13 +111,18 @@ class GroundedEncoder(nn.Module):
 
 # ## Predictor: kinematics on the block, residual MLP on the free dims
 
-def unicycle_step(block: torch.Tensor, action: torch.Tensor, dt: float, eps: float = 1e-6) -> torch.Tensor:
+def unicycle_step(block: torch.Tensor, action: torch.Tensor, dt: float,
+                  a_v=1.0, a_omega=1.0, eps: float = 1e-6) -> torch.Tensor:
     """Advance a (B, 4) block [x, y, cos th, sin th] by one unicycle step.
 
     Semi-implicit Euler, matching sim/dynamics.py: rotate heading first, then move
     along the NEW heading. Heading stays on the unit circle by construction (a
     rotation), and the prediction loss pushes the encoder's raw heading dims onto
     it too. No angle wrapping needed since heading is carried as (cos, sin).
+
+    a_v, a_omega are gray-box speed/turn-rate scales (default 1 = pure known kinematics).
+    A learnable a_v lets the block ABSORB an unmodeled actuator loss (commanded v vs applied
+    a_v*v), the same lever the ego model has; locked at 1 it cannot.
     """
     x, y   = block[:, 0:1], block[:, 1:2]
     c, s   = block[:, 2:3], block[:, 3:4]
@@ -126,11 +131,11 @@ def unicycle_step(block: torch.Tensor, action: torch.Tensor, dt: float, eps: flo
     v      = action[:, 0:1]
     omega  = action[:, 1:2]
 
-    cw, sw = torch.cos(omega * dt), torch.sin(omega * dt)
-    c_new  = c * cw - s * sw                          # rotate the heading vector by omega*dt
+    cw, sw = torch.cos(a_omega * omega * dt), torch.sin(a_omega * omega * dt)
+    c_new  = c * cw - s * sw                          # rotate the heading vector by a_omega*omega*dt
     s_new  = s * cw + c * sw
-    x_new  = x + v * c_new * dt                       # move along the new heading
-    y_new  = y + v * s_new * dt
+    x_new  = x + a_v * v * c_new * dt                 # move along the new heading (scaled speed)
+    y_new  = y + a_v * v * s_new * dt
     return torch.cat([x_new, y_new, c_new, s_new], dim=1)
 
 
@@ -152,12 +157,21 @@ class GroundedPredictor(nn.Module):
         dt: float = DT,
         lock_block: bool = True,
         block_budget: float = 0.0,
+        learn_coeffs: bool = False,
     ):
         super().__init__()
         self.block_dim    = block_dim
         self.dt           = dt
         self.lock_block   = lock_block
         self.block_budget = block_budget
+        # gray-box speed/turn scales on the block kinematics. Learnable lets the block
+        # absorb an unmodeled actuator gain (else locked at 1 = pure known kinematics).
+        if learn_coeffs:
+            self.log_a_v     = nn.Parameter(torch.zeros(()))
+            self.log_a_omega = nn.Parameter(torch.zeros(()))
+        else:
+            self.register_buffer("log_a_v",     torch.zeros(()))
+            self.register_buffer("log_a_omega", torch.zeros(()))
         self.net = nn.Sequential(
             nn.Linear(latent_dim + action_dim, hidden),
             nn.ReLU(inplace=True),
@@ -169,7 +183,8 @@ class GroundedPredictor(nn.Module):
     def forward(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         K          = self.block_dim
         learned    = self.net(torch.cat([z, action], dim=-1))
-        block_pred = unicycle_step(z[:, :K], action, self.dt)
+        block_pred = unicycle_step(z[:, :K], action, self.dt,
+                                   self.log_a_v.exp(), self.log_a_omega.exp())
         if not self.lock_block and self.block_budget > 0:
             block_pred = block_pred + self.block_budget * torch.tanh(learned[:, :K])
         free_pred  = z[:, K:] + learned[:, K:]        # residual on the free dims
@@ -214,6 +229,7 @@ class GroundedJEPA(nn.Module):
         lock_block: bool = True,
         block_budget: float = 0.0,
         use_decoder: bool = False,
+        learn_coeffs: bool = False,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -221,6 +237,7 @@ class GroundedJEPA(nn.Module):
         self.encoder = GroundedEncoder(grid_size, latent_dim, block_dim, channels=encoder_channels)
         self.predictor = GroundedPredictor(
             latent_dim, block_dim, ACTION_DIM, predictor_hidden, dt, lock_block, block_budget,
+            learn_coeffs=learn_coeffs,
         )
         self.decoder = BlockDecoder(block_dim, grid_size) if use_decoder else None
 

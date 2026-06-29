@@ -56,6 +56,8 @@ def parse_args():
                    help="privileged state anchor on the SIGReg-free block (raw pose); tests if the exempt dims encode pose properly under direct supervision")
     p.add_argument("--pred-block-weight", type=float, default=C.PRED_BLOCK_WEIGHT,
                    help="weight on block dims in the prediction loss; physics-consistency strength (the heading lever)")
+    p.add_argument("--learn-coeffs", action="store_true",
+                   help="learn block a_v/a_omega (gray-box scales); lets the block absorb an unmodeled actuator gain instead of locking it at 1")
     # training
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
@@ -90,6 +92,7 @@ def main():
     if a.recon_fg_weight > 0: tag += f"_fg{a.recon_fg_weight:g}"
     if a.pred_block_weight != 1.0: tag += f"_pb{a.pred_block_weight:g}"
     if a.lam_anchor > 0:   tag += f"_anc{a.lam_anchor:g}"
+    if a.learn_coeffs:     tag += "_learn"
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
     ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
@@ -111,6 +114,7 @@ def main():
         grid_size=a.grid_size, latent_dim=a.latent_dim, block_dim=a.block_dim,
         dt=a.pred_step * C.DT, lock_block=a.lock_block, block_budget=a.block_budget,
         use_decoder=(a.use_decoder or a.lam_recon > 0),   # decoder grounds the block; auto-on with lam_recon
+        learn_coeffs=a.learn_coeffs,
     ).to(a.device).train()
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
 
@@ -193,6 +197,19 @@ def main():
         m = res[nm]
         print(f"  {nm:7s}  theta_flip {m['theta_flip_pct']:6.2f}  theta_mae {m['theta_mae_deg']:6.2f}  "
               f"x_r2 {m['x_r2']:+.3f}  y_r2 {m['y_r2']:+.3f}")
+
+    # actuator-recovery readout (only meaningful with --learn-coeffs): does the learnable
+    # block a_v recover the dataset's true actuator gain, like the ego model does?
+    if a.learn_coeffs:
+        import h5py
+        with h5py.File(data_path, "r") as _f:
+            true_gain = float(_f.attrs.get("actuator_gain", 1.0))
+        learned_av = model.predictor.log_a_v.exp().item()
+        print(f"\nactuator recovery: true gain={true_gain:.3f}  ->  learned block a_v={learned_av:.4f}  "
+              f"a_omega={model.predictor.log_a_omega.exp().item():.4f}  (abs error {abs(learned_av - true_gain):.4f})")
+        with open(report_dir / "actuator_recovery.csv", "w", newline="") as _fc:
+            _w = csv.writer(_fc); _w.writerow(["true_gain", "learned_a_v", "a_omega"])
+            _w.writerow([f"{true_gain:.4f}", f"{learned_av:.4f}", f"{model.predictor.log_a_omega.exp().item():.4f}"])
 
     print(f"\ndone -> {report_dir}")
 

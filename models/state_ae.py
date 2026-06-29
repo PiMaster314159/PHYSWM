@@ -258,6 +258,37 @@ def ego_loss(out: dict, frame: torch.Tensor, next_frame: torch.Tensor,
     return total, parts
 
 
+def ego_rollout_loss(model, frame: torch.Tensor, actions: torch.Tensor, poses: torch.Tensor,
+                     lam_recon: float = 1.0, lam_anchor: float = 1.0, lam_rollout: float = 1.0,
+                     recon_fg_weight: float = 0.0) -> tuple:
+    """Multi-step rollout supervision (fixes the single-step a_v bias).
+
+    Encode frame_0 ONCE, then roll the gray-box dynamics K steps over the action sequence
+    (no re-encoding) and anchor EVERY rolled state to the true pose at that horizon. Unlike
+    the single-step anchor_pred, a wrong a_v COMPOUNDS across the rollout, so the optimizer
+    gets real gradient to pull a_v onto the true gain instead of leaving it loosely pinned.
+
+    frame:   (B, 1, H, W)         the first frame
+    actions: (B, K, 2)            the K held actions
+    poses:   (B, K+1, 3)          true (x, y, theta) at horizons 0..K
+    """
+    def to_state(p):                                  # (B,3) -> (B,4) [x, y, cos, sin]
+        return torch.stack([p[:, 0], p[:, 1], torch.cos(p[:, 2]), torch.sin(p[:, 2])], dim=1)
+
+    s      = model.encode(frame)
+    recon  = _img_loss(model.render(s), frame, recon_fg_weight)
+    anchor = F.mse_loss(s, to_state(poses[:, 0]))     # ground the initial state
+    K      = actions.shape[1]
+    roll   = s.new_zeros(())
+    for k in range(K):                                # open-loop rollout, anchored each step
+        s = model.step(s, actions[:, k])
+        roll = roll + F.mse_loss(s, to_state(poses[:, k + 1]))
+    roll = roll / K
+    total = lam_recon * recon + lam_anchor * anchor + lam_rollout * roll
+    parts = {"recon": recon.item(), "anchor": anchor.item(), "rollout": roll.item(), "total": total.item()}
+    return total, parts
+
+
 # ## Smoke test
 #   python -c "from models.state_ae import _test_state_ae; _test_state_ae()"
 

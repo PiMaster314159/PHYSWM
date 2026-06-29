@@ -29,8 +29,8 @@ import torch.nn.functional as F
 torch.set_num_threads(4)
 
 import config as C
-from models.state_ae import EgoWorldModel, ego_loss, STATE_DIM
-from models.dataset import make_dataloaders
+from models.state_ae import EgoWorldModel, ego_loss, ego_rollout_loss, STATE_DIM
+from models.dataset import make_dataloaders, make_rollout_dataloaders
 
 
 # ---- small, self-contained evaluation helpers ----
@@ -146,6 +146,8 @@ def parse_args():
     p.add_argument("--lam-recon", type=float, default=1.0, help="weight on frame reconstruction; set 0 to drop the decoder grounding entirely (the anchor grounds instead)")
     p.add_argument("--lam-anchor", type=float, default=0.0, help="privileged state anchor: pull encoded state toward true pose during training (camera-only at inference). 0 = off (pure label-free)")
     p.add_argument("--lam-anchor-pred", type=float, default=0.0, help="also supervise the PREDICTED next state against true next pose (makes the predictor real dynamics)")
+    p.add_argument("--rollout-k", type=int, default=1, help="rollout-training horizon (transitions). >1 switches to multi-step rollout supervision: encode frame_0, roll K steps, anchor each to true pose. Compounds the a_v error so it fixes the single-step bias")
+    p.add_argument("--lam-rollout", type=float, default=1.0, help="weight on the K-step rollout term (rollout mode only)")
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
     p.add_argument("--batch-size", type=int, default=C.BATCH_SIZE)
@@ -174,6 +176,21 @@ def val_total(model, dl, device, a, max_batches=50):
     return sum(tot) / max(len(tot), 1)
 
 
+@torch.no_grad()
+def rollout_val(model, dl, device, a, max_batches=50):
+    model.eval()
+    tot = []
+    for i, b in enumerate(dl):
+        if i >= max_batches:
+            break
+        _, parts = ego_rollout_loss(model, b["frame"].to(device), b["actions"].to(device),
+                                    b["poses"].to(device), a.lam_recon, a.lam_anchor,
+                                    a.lam_rollout, a.recon_fg_weight)
+        tot.append(parts["total"])
+    model.train()
+    return sum(tot) / max(len(tot), 1)
+
+
 def main():
     a = parse_args()
     tag = f"ego_s{a.pred_step}_e{a.epochs}"
@@ -185,6 +202,7 @@ def main():
     if a.lam_anchor > 0:       tag += f"_anc{a.lam_anchor:g}"
     if a.lam_anchor_pred > 0:  tag += f"_ancp{a.lam_anchor_pred:g}"
     if a.residual_budget > 0:  tag += f"_gray{a.residual_budget:g}"
+    if a.rollout_k > 1:        tag += f"_roll{a.rollout_k}"   # multi-step rollout training
     if a.learn_coeffs:         tag += "_learn"
     tag += "_bc" if a.decoder == "broadcast" else "_mlpdec"   # decoder in the name -> own folder
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
@@ -201,58 +219,83 @@ def main():
           f"residual_budget={a.residual_budget}")
 
     torch.manual_seed(C.SEED)
-    need_state = a.lam_anchor > 0 or a.lam_anchor_pred > 0   # privileged state only loaded when anchoring
-    train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
-                                        return_state=need_state, step=a.pred_step)
     model = EgoWorldModel(grid_size=a.grid_size, dt=a.pred_step * C.DT,
                           residual_budget=a.residual_budget, learn_coeffs=a.learn_coeffs,
                           decoder=a.decoder).to(a.device).train()
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
-
     best, step = float("inf"), 0
     train_hist, val_hist = [], []
-    for epoch in range(a.epochs):
-        for b in train_dl:
-            frame, nxt = b["frame"].to(a.device), b["next_frame"].to(a.device)
-            out = model(frame, b["action"].to(a.device), nxt)
-            s_tgt = state_to_target(b["state"]).to(a.device) if need_state else None
-            s_next_tgt = state_to_target(b["next_state"]).to(a.device) if need_state else None
-            loss, parts = ego_loss(out, frame, nxt, a.lam_dyn, a.lam_pred,
-                                   a.lam_var, a.var_gamma, a.recon_fg_weight,
-                                   lam_recon=a.lam_recon, s_target=s_tgt, s_next_target=s_next_tgt,
-                                   lam_anchor=a.lam_anchor, lam_anchor_pred=a.lam_anchor_pred)
-            opt.zero_grad(); loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-            opt.step(); step += 1
-            if step % 50 == 0:
-                per_dim = out["s"].std(0).tolist()                 # [std d0, d1, d2, d3]
-                st_std = sum(per_dim) / len(per_dim)
-                row = {"step": step, "epoch": epoch + 1, **parts,
-                       "a_v": model.log_a_v.exp().item(), "a_omega": model.log_a_omega.exp().item(),
-                       "state_std": st_std,
-                       "std0": per_dim[0], "std1": per_dim[1], "std2": per_dim[2], "std3": per_dim[3]}
-                train_hist.append(row)
-                print(f"  step {step:5d}  total {parts['total']:.4f}  recon {parts['recon']:.4f}  "
-                      f"dyn {parts['dyn']:.4f}  pred_recon {parts['pred_recon']:.4f}  var {parts['var']:.4f}  "
-                      f"anchor {parts['anchor']:.4f}  "
-                      f"std[{per_dim[0]:.2f} {per_dim[1]:.2f} {per_dim[2]:.2f} {per_dim[3]:.2f}]")
-        v = val_total(model, val_dl, a.device, a)
-        val_hist.append({"epoch": epoch + 1, "step": step, "val_total": v})
-        print(f"epoch {epoch+1}/{a.epochs}  val total {v:.4f}")
-        if v < best:
-            best = v
-            torch.save(model.state_dict(), ckpt_path)
-            print(f"  new best {best:.4f} -> {ckpt_path}")
 
-    # history CSVs (so the long logs are readable as data)
     def _write_csv(path, rows, cols):
         with open(path, "w", newline="") as f:
             w = csv.writer(f); w.writerow(cols)
             for r in rows:
                 w.writerow([r[c] for c in cols])
-    _write_csv(report_dir / "train_history.csv", train_hist,
-               ["step", "epoch", "total", "recon", "dyn", "pred_recon", "var", "anchor", "anchor_pred",
-                "a_v", "a_omega", "state_std", "std0", "std1", "std2", "std3"])
+
+    if a.rollout_k > 1:
+        # ---- multi-step rollout training: compounds the a_v error so the bias gets fixed ----
+        train_dl, val_dl = make_rollout_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
+                                                    K=a.rollout_k, step=a.pred_step)
+        print(f"rollout training: K={a.rollout_k} transitions  ({len(train_dl.dataset)} windows)")
+        for epoch in range(a.epochs):
+            for b in train_dl:
+                loss, parts = ego_rollout_loss(model, b["frame"].to(a.device), b["actions"].to(a.device),
+                                               b["poses"].to(a.device), a.lam_recon, a.lam_anchor,
+                                               a.lam_rollout, a.recon_fg_weight)
+                opt.zero_grad(); loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                opt.step(); step += 1
+                if step % 50 == 0:
+                    row = {"step": step, "epoch": epoch + 1, **parts,
+                           "a_v": model.log_a_v.exp().item(), "a_omega": model.log_a_omega.exp().item()}
+                    train_hist.append(row)
+                    print(f"  step {step:5d}  total {parts['total']:.4f}  recon {parts['recon']:.4f}  "
+                          f"anchor {parts['anchor']:.4f}  rollout {parts['rollout']:.4f}  "
+                          f"a_v {row['a_v']:.3f}  a_omega {row['a_omega']:.3f}")
+            v = rollout_val(model, val_dl, a.device, a)
+            val_hist.append({"epoch": epoch + 1, "step": step, "val_total": v})
+            print(f"epoch {epoch+1}/{a.epochs}  val total {v:.4f}")
+            if v < best:
+                best = v; torch.save(model.state_dict(), ckpt_path); print(f"  new best {best:.4f} -> {ckpt_path}")
+        hist_cols = ["step", "epoch", "total", "recon", "anchor", "rollout", "a_v", "a_omega"]
+    else:
+        need_state = a.lam_anchor > 0 or a.lam_anchor_pred > 0   # privileged state only loaded when anchoring
+        train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
+                                            return_state=need_state, step=a.pred_step)
+        for epoch in range(a.epochs):
+            for b in train_dl:
+                frame, nxt = b["frame"].to(a.device), b["next_frame"].to(a.device)
+                out = model(frame, b["action"].to(a.device), nxt)
+                s_tgt = state_to_target(b["state"]).to(a.device) if need_state else None
+                s_next_tgt = state_to_target(b["next_state"]).to(a.device) if need_state else None
+                loss, parts = ego_loss(out, frame, nxt, a.lam_dyn, a.lam_pred,
+                                       a.lam_var, a.var_gamma, a.recon_fg_weight,
+                                       lam_recon=a.lam_recon, s_target=s_tgt, s_next_target=s_next_tgt,
+                                       lam_anchor=a.lam_anchor, lam_anchor_pred=a.lam_anchor_pred)
+                opt.zero_grad(); loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                opt.step(); step += 1
+                if step % 50 == 0:
+                    per_dim = out["s"].std(0).tolist()                 # [std d0, d1, d2, d3]
+                    st_std = sum(per_dim) / len(per_dim)
+                    row = {"step": step, "epoch": epoch + 1, **parts,
+                           "a_v": model.log_a_v.exp().item(), "a_omega": model.log_a_omega.exp().item(),
+                           "state_std": st_std,
+                           "std0": per_dim[0], "std1": per_dim[1], "std2": per_dim[2], "std3": per_dim[3]}
+                    train_hist.append(row)
+                    print(f"  step {step:5d}  total {parts['total']:.4f}  recon {parts['recon']:.4f}  "
+                          f"dyn {parts['dyn']:.4f}  pred_recon {parts['pred_recon']:.4f}  var {parts['var']:.4f}  "
+                          f"anchor {parts['anchor']:.4f}  "
+                          f"std[{per_dim[0]:.2f} {per_dim[1]:.2f} {per_dim[2]:.2f} {per_dim[3]:.2f}]")
+            v = val_total(model, val_dl, a.device, a)
+            val_hist.append({"epoch": epoch + 1, "step": step, "val_total": v})
+            print(f"epoch {epoch+1}/{a.epochs}  val total {v:.4f}")
+            if v < best:
+                best = v; torch.save(model.state_dict(), ckpt_path); print(f"  new best {best:.4f} -> {ckpt_path}")
+        hist_cols = ["step", "epoch", "total", "recon", "dyn", "pred_recon", "var", "anchor", "anchor_pred",
+                     "a_v", "a_omega", "state_std", "std0", "std1", "std2", "std3"]
+
+    _write_csv(report_dir / "train_history.csv", train_hist, hist_cols)
     _write_csv(report_dir / "val_history.csv", val_hist, ["epoch", "step", "val_total"])
     print(f"wrote train_history.csv ({len(train_hist)} rows) + val_history.csv")
 

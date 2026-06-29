@@ -40,7 +40,9 @@ CK   = C.CHECKPOINTS_DIR
 
 
 def build_models(run, step, epochs):
-    """(label, model, checkpoint path). Tags mirror the run_*.py naming for these runs."""
+    """(label, model, checkpoint, decode) per run. decode='direct' reads pose straight off
+    dims 0-3 (ego = whole latent, grounded = the anchored block, both ARE pose); 'probe'
+    fits a linear z->pose decoder (the residual JEPA's code is distributed, so it needs one)."""
     dt = step * C.DT
     jepa_res_anc = JEPA(grid_size=GRID, latent_dim=128, predictor_mode="residual", state_head=False)
     jepa_res_rd  = JEPA(grid_size=GRID, latent_dim=128, predictor_mode="residual", state_head=True)
@@ -48,15 +50,19 @@ def build_models(run, step, epochs):
     return [
         ("ego (learnable a_v)",
          EgoWorldModel(grid_size=GRID, dt=dt, residual_budget=0.0, learn_coeffs=True, decoder="mlp"),
-         CK / f"{run}_ego_s{step}_e{epochs}_fg5_anc1_ancp1_learn_mlpdec.pt"),
+         CK / f"{run}_ego_s{step}_e{epochs}_fg5_anc1_ancp1_learn_mlpdec.pt", "direct"),
         ("residual JEPA + anchor", jepa_res_anc,
-         CK / f"{run}_residual_s{step}_e{epochs}_anc1.pt"),
+         CK / f"{run}_residual_s{step}_e{epochs}_anc1.pt", "probe"),
         ("residual JEPA + readout", jepa_res_rd,
-         CK / f"{run}_residual_s{step}_e{epochs}_rd1.pt"),
-        ("grounded + block anchor",
+         CK / f"{run}_residual_s{step}_e{epochs}_rd1.pt", "probe"),
+        ("grounded (locked gain)",
          GroundedJEPA(grid_size=GRID, latent_dim=128, block_dim=4, dt=dt,
                       lock_block=True, block_budget=0.0, use_decoder=False),
-         CK / f"{run}_grounded_s{step}_e{epochs}_anc1.pt"),
+         CK / f"{run}_grounded_s{step}_e{epochs}_anc1.pt", "direct"),
+        ("grounded (learnable gain)",
+         GroundedJEPA(grid_size=GRID, latent_dim=128, block_dim=4, dt=dt,
+                      lock_block=True, block_budget=0.0, use_decoder=False, learn_coeffs=True),
+         CK / f"{run}_grounded_s{step}_e{epochs}_anc1_learn.pt", "direct"),
     ]
 
 
@@ -80,10 +86,12 @@ def load_val_episodes(data_path, seed, n_eps, val_frac=0.1):
     return eps
 
 
-def fit_probe(model, episodes, device, max_frames=4000):
-    """Fit a fixed linear probe z -> pose on the ENCODED frames (the decoder for rollout).
+def fit_probe(model, episodes, device, max_frames=30000):
+    """Fit a fixed linear probe z -> pose on the ENCODED frames (decoder for the residual JEPA).
 
-    Only the encoding is under no_grad; the probe itself must train with grad enabled.
+    Only the encoding is under no_grad; the probe itself must train with grad enabled. Trained
+    hard (long, large batch) so its baseline matches the model's true single-frame floor rather
+    than sitting inflated.
     """
     F = np.concatenate([ep[0] for ep in episodes])
     S = np.concatenate([ep[2] for ep in episodes])
@@ -94,14 +102,14 @@ def fit_probe(model, episodes, device, max_frames=4000):
     with torch.no_grad():
         Z = torch.cat([model.encode(Ft[i:i + 512]).cpu() for i in range(0, len(Ft), 512)])
     T = state_to_target(torch.from_numpy(S).float())
-    probe = train_probe(make_linear_probe(Z.shape[1]), Z, T, epochs=120, device=device)
+    probe = train_probe(make_linear_probe(Z.shape[1]), Z, T, epochs=300, batch_size=4096, device=device)
     return probe.to(device).eval()
 
 
 @torch.no_grad()
-def rollout(model, probe, episodes, pred_step, H, device):
+def rollout(model, decode, episodes, pred_step, H, device):
     """Mean pose error vs horizon h (in transitions). Encode frame 0, roll the predictor h
-    times, decode with the probe, compare to true pose at sim-step h*pred_step."""
+    times, decode to pose (direct slice or probe), compare to true pose at sim-step h*pred_step."""
     roll = roll_fn(model)
     pos = {h: [] for h in range(H + 1)}
     head = {h: [] for h in range(H + 1)}
@@ -111,7 +119,7 @@ def rollout(model, probe, episodes, pred_step, H, device):
         z = model.encode(torch.from_numpy(frames[0]).float().view(1, 1, GRID, GRID).to(device))
         for h in range(Hmax + 1):
             idx = h * pred_step
-            p = probe(z)[0].cpu().numpy()                     # decoded (x, y, cos, sin)
+            p = decode(z)[0].cpu().numpy()                    # decoded (x, y, cos, sin)
             tp = states[idx]                                  # true (x, y, theta)
             pos[h].append(float(np.hypot(p[0] - tp[0], p[1] - tp[1])))
             d = np.arctan2(p[3], p[2]) - tp[2]
@@ -143,14 +151,17 @@ def main():
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.8))
     rows = []
-    for label, model, ckpt in build_models(a.run, a.pred_step, a.epochs):
+    for label, model, ckpt, kind in build_models(a.run, a.pred_step, a.epochs):
         if not ckpt.exists():
             print(f"!! missing checkpoint, skipping: {ckpt}")
             continue
         model.load_state_dict(torch.load(ckpt, map_location=device, weights_only=True))
         model.to(device).eval()
-        probe = fit_probe(model, episodes, device)
-        hz, pe, he = rollout(model, probe, episodes, a.pred_step, a.horizon, device)
+        if kind == "probe":
+            decode = fit_probe(model, episodes, device)          # distributed latent -> learned readout
+        else:
+            decode = lambda z: z[:, :4]                          # ego / grounded block: latent IS pose
+        hz, pe, he = rollout(model, decode, episodes, a.pred_step, a.horizon, device)
         steps = [h * a.pred_step for h in hz]                  # x-axis in sim-steps (comparable across pred_step)
         axes[0].plot(steps, pe, marker="o", ms=3, label=label)
         axes[1].plot(steps, he, marker="o", ms=3, label=label)

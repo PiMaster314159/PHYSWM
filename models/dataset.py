@@ -160,6 +160,68 @@ class RobotTransitions(Dataset):
 # In[ ]:
 
 
+class RolloutWindows(Dataset):
+    """Windows for multi-step rollout training: a start frame, K held actions, and the true
+    poses at horizons 0..K. The model encodes the frame once and rolls K dynamics steps.
+    Window starts are hold-aligned (stride `step`); episodes too short for K transitions
+    contribute nothing. Only the FIRST frame is returned (the rollout is open-loop)."""
+
+    def __init__(self, h5_path, episodes=None, K: int = 4, step: int = PRED_STEP):
+        with h5py.File(h5_path, "r") as f:
+            self.frames  = f["frames"][:]
+            self.actions = f["actions"][:]
+            self.states  = f["states"][:]
+            starts  = f["episode_starts"][:]
+            lengths = f["episode_lengths"][:]
+            self.grid_size = int(f.attrs["grid_size"])
+            hold_k = int(f.attrs["hold_k"])
+        if step > 1 and hold_k % step != 0:
+            raise ValueError(f"step {step} must divide hold_k {hold_k}")
+        if episodes is not None:
+            episodes = np.asarray(episodes, dtype=np.int64)
+            starts, lengths = starts[episodes], lengths[episodes]
+        self.K, self.step = K, step
+        chunks = []
+        for s, n in zip(starts, lengths):
+            n_win = (n - 1) // step - K + 1            # length-K windows that fit in the episode
+            if n_win >= 1:
+                chunks.append(int(s) + np.arange(n_win) * step)
+        self.index = np.concatenate(chunks) if chunks else np.empty(0, dtype=np.int64)
+
+    def __len__(self) -> int:
+        return len(self.index)
+
+    def __getitem__(self, idx: int) -> dict:
+        b, step, K = int(self.index[idx]), self.step, self.K
+        frame = torch.from_numpy(self.frames[b]).to(torch.float32).unsqueeze(0)
+        acts  = torch.stack([torch.from_numpy(self.actions[b + k * step]).to(torch.float32) for k in range(K)])
+        poses = torch.stack([torch.from_numpy(self.states[b + k * step]).to(torch.float32) for k in range(K + 1)])
+        return {"frame": frame, "actions": acts, "poses": poses}
+
+
+def make_rollout_dataloaders(
+    h5_path: Union[str, Path],
+    batch_size: int = BATCH_SIZE,
+    val_frac: float = 0.1,
+    seed: int = SEED,
+    K: int = 4,
+    num_workers: int = 0,
+    step: int = PRED_STEP,
+) -> tuple:
+    """Train/val rollout-window loaders with the SAME episode-level split as make_dataloaders."""
+    with h5py.File(h5_path, "r") as f:
+        n_ep = len(f["episode_starts"])
+    rng   = np.random.default_rng(seed)
+    perm  = rng.permutation(n_ep)
+    n_val = int(round(val_frac * n_ep))
+    val_ep, train_ep = perm[:n_val], perm[n_val:]
+    train_ds = RolloutWindows(h5_path, episodes=train_ep, K=K, step=step)
+    val_ds   = RolloutWindows(h5_path, episodes=val_ep,   K=K, step=step)
+    train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=num_workers)
+    val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    return train_dl, val_dl
+
+
 def make_dataloaders(
     h5_path: Union[str, Path],
     batch_size: int = BATCH_SIZE,
