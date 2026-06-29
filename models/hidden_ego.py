@@ -3,16 +3,19 @@ unobservable, per-episode physical parameter (here, the actuator gain a_v).
 
 Latent = [ x, y, cos th, sin th | h_1 .. h_K ].
   - pose (4 dims): grounded by the anchor + reconstruction, exactly as the base ego model.
-  - hidden (K dims): inferred from a SHORT STACK of frames (the gain is invisible in one frame;
-    you only see it in how motion responds), and it SETS the speed coefficient via a_v = exp(head(h)).
+  - hidden (K dims): inferred from a SHORT STACK of frames AND the commanded actions over that
+    stack (the gain is invisible in one frame, and unidentifiable without the actions: observed
+    motion alone confounds the gain with the unseen commanded velocity). The FIRST hidden dim IS
+    the speed scale a_v directly (no coefficient head, no squashing): x' = x + h*v*cos*dt.
 
-So the hidden state literally modulates how the four pose values update. a_omega stays locked at 1
-(the actuator only scales speed, and the locked rotation is the heading-grounding force).
+So the hidden state literally modulates how the four pose values update, and reads out as the gain
+with no intermediate mapping. a_omega stays locked at 1 (the actuator only scales speed, and the
+locked rotation is the heading-grounding force).
 
 Supervised vs unsupervised gain (a flag at the loss level via lam_gain):
-  lam_gain > 0  -> anchor a_v=g(h) to the TRUE per-episode gain (privileged info, easy/clean).
-  lam_gain = 0  -> a_v is forced only by the dynamics-consistency; probe h against truth afterward
-                   (the stronger "discovered it on its own" result).
+  lam_gain > 0  -> anchor a_v=h to the TRUE per-episode gain (privileged info, easy/clean).
+  lam_gain = 0  -> a_v=h is forced only by the dynamics-consistency (anchor_pred / dyn); probe h
+                   against truth afterward (the stronger "discovered it on its own" result).
 """
 import sys
 from pathlib import Path
@@ -33,25 +36,38 @@ STACK      = 4   # frames per history stack (at stride = pred_step)
 
 
 class HiddenStateEncoder(nn.Module):
-    """Conv trunk over a STACK of frames -> [pose(4) | hidden(K)].
+    """DECOUPLED encoder -> [pose(4) | hidden(K)].
 
-    The stack is `stack` frames at stride pred_step, so it spans real motion; pose reads off the
-    most recent content, the hidden dims read off how the motion responds (which reveals the gain).
+    Pose is read from the CURRENT (most recent) frame only, so it stays sharp, the same single-frame
+    signal the base ego uses. The hidden gain is read from the FULL stack of frames PLUS the
+    commanded action stack: motion across frames reveals the displacement, the actions reveal the
+    command, and the gain is their ratio (so it is unidentifiable from frames alone). Splitting the
+    two trunks keeps pose tight while still inferring the gain.
     """
 
     def __init__(self, grid_size: int = GRID_SIZE, channels: tuple = ENCODER_CHANNELS,
                  stack: int = STACK, hidden_dim: int = HIDDEN_DIM):
         super().__init__()
         self.stack, self.hidden_dim = stack, hidden_dim
-        layers, c_in = [], stack                       # stacked frames go in as channels
-        for c_out in channels:
-            layers += [nn.Conv2d(c_in, c_out, 3, stride=2, padding=1), nn.ReLU(inplace=True)]
-            c_in = c_out
-        self.conv = nn.Sequential(*layers)
+
+        def trunk(c_in):
+            layers, c = [], c_in
+            for c_out in channels:
+                layers += [nn.Conv2d(c, c_out, 3, stride=2, padding=1), nn.ReLU(inplace=True)]
+                c = c_out
+            return nn.Sequential(*layers)
+
+        self.pose_conv = trunk(1)          # single current frame -> pose (sharp)
+        self.gain_conv = trunk(stack)      # full stack -> hidden gain (needs motion)
         with torch.no_grad():
-            flat = self.conv(torch.zeros(1, stack, grid_size, grid_size)).flatten(1).shape[1]
-        self.pose_head   = nn.Linear(flat, 4)
-        self.hidden_head = nn.Linear(flat, hidden_dim)
+            flat_p = self.pose_conv(torch.zeros(1, 1, grid_size, grid_size)).flatten(1).shape[1]
+            flat_g = self.gain_conv(torch.zeros(1, stack, grid_size, grid_size)).flatten(1).shape[1]
+        self.pose_head   = nn.Linear(flat_p, 4)
+        # gain head sees motion features AND the commanded action stack (flattened). a_v = first
+        # hidden dim directly; init weight=0, bias=1 so a_v starts at 1.0 (known kinematics) and the
+        # model only learns to read the per-episode gain off the (motion, action) pair.
+        self.hidden_head = nn.Linear(flat_g + stack * ACTION_DIM, hidden_dim)
+        nn.init.zeros_(self.hidden_head.weight); nn.init.ones_(self.hidden_head.bias)
 
     @staticmethod
     def constrain(raw: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -59,12 +75,15 @@ class HiddenStateEncoder(nn.Module):
         head = F.normalize(raw[:, 2:4], dim=1, eps=eps)
         return torch.cat([pos, head], dim=1)
 
-    def forward(self, frames: torch.Tensor) -> torch.Tensor:
+    def forward(self, frames: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         if frames.ndim != 4:
-            raise ValueError(f"expected (B, stack, H, W), got {tuple(frames.shape)}")
-        feat   = self.conv(frames).flatten(1)
-        pose   = self.constrain(self.pose_head(feat))
-        hidden = self.hidden_head(feat)
+            raise ValueError(f"expected frames (B, stack, H, W), got {tuple(frames.shape)}")
+        if actions.ndim != 3:
+            raise ValueError(f"expected actions (B, stack, {ACTION_DIM}), got {tuple(actions.shape)}")
+        current = frames[:, -1:, :, :]                          # most recent frame -> pose
+        pose    = self.constrain(self.pose_head(self.pose_conv(current).flatten(1)))
+        motion  = self.gain_conv(frames).flatten(1)             # displacement across the stack
+        hidden  = self.hidden_head(torch.cat([motion, actions.flatten(1)], dim=1))
         return torch.cat([pose, hidden], dim=1)
 
 
@@ -86,7 +105,8 @@ def ego_step_hidden(state: torch.Tensor, action: torch.Tensor, dt: float,
 
 
 class HiddenEgoWorldModel(nn.Module):
-    """Encoder(stack) -> [pose | hidden]; dynamics with a_v = exp(head(hidden)); renderer on pose."""
+    """Encoder(stack, actions) -> [pose | hidden]; dynamics with a_v = the hidden dim itself
+    (no coefficient head, no squashing); renderer on the 4 pose dims."""
 
     def __init__(self, grid_size: int = GRID_SIZE, dt: float = DT, channels: tuple = ENCODER_CHANNELS,
                  stack: int = STACK, hidden_dim: int = HIDDEN_DIM, renderer_hidden: int = 512):
@@ -94,15 +114,15 @@ class HiddenEgoWorldModel(nn.Module):
         self.dt, self.stack, self.hidden_dim = dt, stack, hidden_dim
         self.encoder  = HiddenStateEncoder(grid_size, channels, stack, hidden_dim)
         self.renderer = Renderer(STATE_DIM, grid_size, renderer_hidden)   # renders from the 4 pose dims
-        # a_v = exp(head(hidden)); zero-init -> a_v = 1 at start (known kinematics), only learns to deviate
-        self.av_head = nn.Linear(hidden_dim, 1)
-        nn.init.zeros_(self.av_head.weight); nn.init.zeros_(self.av_head.bias)
 
-    def encode(self, frames: torch.Tensor) -> torch.Tensor:
-        return self.encoder(frames)
+    def encode(self, frames: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        return self.encoder(frames, actions)
 
     def gain(self, state: torch.Tensor) -> torch.Tensor:
-        return self.av_head(state[:, 4:]).exp()        # (B,1) per-sample speed scale
+        # a_v IS the first hidden latent dim, used directly as the velocity scale. No coefficient
+        # head and no sigmoid/exp: the dynamics' anchor_pred pins it to the true displacement scale
+        # (~[0.5,1]), so it cannot run away the way the unbounded/saturating coefficient did.
+        return state[:, 4:5]                                    # (B,1)
 
     def render(self, state: torch.Tensor) -> torch.Tensor:
         return self.renderer(state[:, :4])
@@ -110,9 +130,10 @@ class HiddenEgoWorldModel(nn.Module):
     def step(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         return ego_step_hidden(state, action, self.dt, self.gain(state))
 
-    def forward(self, frames: torch.Tensor, action: torch.Tensor, next_frames: torch.Tensor) -> dict:
-        s      = self.encode(frames)
-        s_next = self.encode(next_frames)
+    def forward(self, frames: torch.Tensor, action_hist: torch.Tensor, action: torch.Tensor,
+                next_frames: torch.Tensor, next_action_hist: torch.Tensor) -> dict:
+        s      = self.encode(frames, action_hist)
+        s_next = self.encode(next_frames, next_action_hist)
         s_pred = self.step(s, action)
         return {
             "s": s, "s_next": s_next, "s_pred": s_pred, "gain": self.gain(s),

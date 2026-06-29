@@ -260,14 +260,24 @@ class HistoryTransitions(Dataset):
         frs = [self.frames[end - (K - 1 - k) * step] for k in range(K)]   # oldest .. newest(end)
         return torch.from_numpy(np.stack(frs)).to(torch.float32)          # (stack, H, W)
 
+    def _actions_at(self, end: int) -> torch.Tensor:
+        """The commanded actions aligned with the frame stack (same positions as _stack_at). The
+        gain head needs these: the per-episode gain is observed-motion / commanded-v, so without
+        the actions a_v is unidentifiable (displacement a_v*v*dt confounds a_v with the unseen v)."""
+        step, K = self.step, self.stack
+        acts = [self.actions[end - (K - 1 - k) * step] for k in range(K)]  # oldest .. newest(end)
+        return torch.from_numpy(np.stack(acts)).to(torch.float32)          # (stack, ACTION_DIM)
+
     def __getitem__(self, idx: int) -> dict:
         i, step = int(self.index[idx]), self.step
         sample = {
-            "frame":      self._stack_at(i),
-            "next_frame": self._stack_at(i + step),
-            "action":     torch.from_numpy(self.actions[i]).to(torch.float32),
-            "state":      torch.from_numpy(self.states[i]).to(torch.float32),
-            "next_state": torch.from_numpy(self.states[i + step]).to(torch.float32),
+            "frame":            self._stack_at(i),
+            "next_frame":       self._stack_at(i + step),
+            "action_hist":      self._actions_at(i),
+            "next_action_hist": self._actions_at(i + step),
+            "action":           torch.from_numpy(self.actions[i]).to(torch.float32),
+            "state":            torch.from_numpy(self.states[i]).to(torch.float32),
+            "next_state":       torch.from_numpy(self.states[i + step]).to(torch.float32),
         }
         if self.gains is not None:
             sample["gain"] = torch.tensor([float(self.gains[i])], dtype=torch.float32)   # (1,)

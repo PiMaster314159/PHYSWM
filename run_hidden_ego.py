@@ -40,7 +40,7 @@ def extract(model, dl, device):
     model.eval()
     S, G, T, GT = [], [], [], []
     for b in dl:
-        s = model.encode(b["frame"].to(device))
+        s = model.encode(b["frame"].to(device), b["action_hist"].to(device))
         S.append(s.cpu()); G.append(model.gain(s).cpu()); T.append(b["state"])
         if "gain" in b:
             GT.append(b["gain"])
@@ -61,7 +61,8 @@ def val_total(model, dl, device, a):
         if i >= 50:
             break
         frame, nxt = b["frame"].to(device), b["next_frame"].to(device)
-        out = model(frame, b["action"].to(device), nxt)
+        out = model(frame, b["action_hist"].to(device), b["action"].to(device),
+                    nxt, b["next_action_hist"].to(device))
         _, parts = hidden_ego_loss(out, frame, nxt,
                                    state_to_target(b["state"]).to(device),
                                    state_to_target(b["next_state"]).to(device),
@@ -121,10 +122,12 @@ def main():
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
 
     best, step = float("inf"), 0
+    train_hist, val_hist = [], []
     for epoch in range(a.epochs):
         for b in train_dl:
             frame, nxt = b["frame"].to(a.device), b["next_frame"].to(a.device)
-            out = model(frame, b["action"].to(a.device), nxt)
+            out = model(frame, b["action_hist"].to(a.device), b["action"].to(a.device),
+                        nxt, b["next_action_hist"].to(a.device))
             loss, parts = hidden_ego_loss(out, frame, nxt,
                                           state_to_target(b["state"]).to(a.device),
                                           state_to_target(b["next_state"]).to(a.device),
@@ -135,13 +138,26 @@ def main():
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             opt.step(); step += 1
             if step % 50 == 0:
+                av_mean = out["gain"].mean().item()
+                train_hist.append({"step": step, "epoch": epoch + 1, **parts, "a_v_mean": av_mean})
                 print(f"  step {step:5d}  total {parts['total']:.4f}  recon {parts['recon']:.4f}  "
                       f"dyn {parts['dyn']:.4f}  anchor {parts['anchor']:.4f}  "
-                      f"anchor_pred {parts['anchor_pred']:.4f}  gain {parts['gain']:.4f}")
+                      f"anchor_pred {parts['anchor_pred']:.4f}  gain {parts['gain']:.4f}  a_v {av_mean:.3f}")
         v = val_total(model, val_dl, a.device, a)
+        val_hist.append({"epoch": epoch + 1, "step": step, "val_total": v})
         print(f"epoch {epoch+1}/{a.epochs}  val total {v:.4f}")
         if v < best:
             best = v; torch.save(model.state_dict(), ckpt_path); print(f"  new best {best:.4f} -> {ckpt_path}")
+
+    def _write_csv(path, rows, cols):
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f); w.writerow(cols)
+            for r in rows:
+                w.writerow([r[c] for c in cols])
+    _write_csv(report_dir / "train_history.csv", train_hist,
+               ["step", "epoch", "total", "recon", "dyn", "pred_recon", "anchor", "anchor_pred", "gain", "a_v_mean"])
+    _write_csv(report_dir / "val_history.csv", val_hist, ["epoch", "step", "val_total"])
+    print(f"wrote train_history.csv ({len(train_hist)} rows) + val_history.csv")
 
     model.load_state_dict(torch.load(ckpt_path, map_location=a.device, weights_only=True))
 
@@ -151,21 +167,30 @@ def main():
     deg = 180.0 / torch.pi
     th_pred = torch.atan2(S[:, 3], S[:, 2]); d = th_pred - T[:, 2]
     ang = torch.abs(torch.atan2(torch.sin(d), torch.cos(d)))
+    pose = {"theta_flip_pct": (ang > torch.pi/2).float().mean().item()*100,
+            "theta_mae_deg":  (ang.mean()*deg).item(),
+            "x_rmse": (S[:,0]-T[:,0]).pow(2).mean().sqrt().item(),
+            "y_rmse": (S[:,1]-T[:,1]).pow(2).mean().sqrt().item()}
     print("\n-- pose read DIRECTLY from the latent --")
-    print(f"  theta_flip {(ang > torch.pi/2).float().mean().item()*100:.2f}  theta_mae {(ang.mean()*deg).item():.2f}  "
-          f"x_rmse {(S[:,0]-T[:,0]).pow(2).mean().sqrt().item():.4f}  y_rmse {(S[:,1]-T[:,1]).pow(2).mean().sqrt().item():.4f}")
+    print(f"  theta_flip {pose['theta_flip_pct']:.2f}  theta_mae {pose['theta_mae_deg']:.2f}  "
+          f"x_rmse {pose['x_rmse']:.4f}  y_rmse {pose['y_rmse']:.4f}")
+    with open(report_dir / "state_direct.csv", "w", newline="") as f:
+        w = csv.writer(f); w.writerow(list(pose.keys())); w.writerow([f"{v:.4f}" for v in pose.values()])
 
+    print("\n-- HIDDEN GAIN: predicted a_v=g(h) --")
+    print(f"  pred[min {G.min().item():.3f}  mean {G.mean().item():.3f}  max {G.max().item():.3f}]")
     if GT is not None:
         gain_mae  = (G - GT).abs().mean().item()
         gain_corr = pearson(G, GT).item()
-        print("\n-- HIDDEN GAIN: predicted a_v=g(h) vs TRUE per-episode gain --")
-        print(f"  corr {gain_corr:+.3f}  mae {gain_mae:.4f}  "
-              f"pred[min {G.min().item():.3f} mean {G.mean().item():.3f} max {G.max().item():.3f}]  "
-              f"true[min {GT.min().item():.3f} max {GT.max().item():.3f}]")
+        print(f"  vs TRUE per-episode gain: corr {gain_corr:+.3f}  mae {gain_mae:.4f}  "
+              f"true[min {GT.min().item():.3f}  max {GT.max().item():.3f}]")
         with open(report_dir / "gain_recovery.csv", "w", newline="") as f:
             w = csv.writer(f); w.writerow(["corr", "mae", "pred_mean", "true_min", "true_max"])
             w.writerow([f"{gain_corr:.4f}", f"{gain_mae:.4f}", f"{G.mean().item():.4f}",
                         f"{GT.min().item():.4f}", f"{GT.max().item():.4f}"])
+    else:
+        print("  (no per-step 'gains' array in this dataset, e.g. run08 fixed gain; with a constant"
+              " gain g(h) should sit ~flat near the dataset's actuator_gain)")
 
     print("\n-- per-dim correlation of the 4 pose dims with pose --")
     for j, nm in enumerate(["x", "y", "cos_th", "sin_th"]):
