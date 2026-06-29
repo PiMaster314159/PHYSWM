@@ -340,6 +340,7 @@ def collect_dataset(
     marker: str = RENDER_MARKER,
     nose_radius: float = NOSE_RADIUS,
     actuator_gain: float = ACTUATOR_GAIN,
+    gain_range: tuple = None,
     progress_every: int = 100,
 ) -> None:
     """Stream `n_episodes` random-action episodes to an HDF5 file.
@@ -403,6 +404,10 @@ def collect_dataset(
             "actions", shape=(0, 2), maxshape=(None, 2),
             dtype="float32", chunks=(512, 2),
         )
+        gains_ds = f.create_dataset(   # per-step actuator gain (constant within an episode)
+            "gains", shape=(0,), maxshape=(None,),
+            dtype="float32", chunks=(512,),
+        )
 
         episode_starts = []
         episode_lengths = []
@@ -411,6 +416,9 @@ def collect_dataset(
         kept = 0
 
         for ep in range(n_episodes):
+            # per-episode actuator gain: a fresh draw from gain_range each episode (the hidden
+            # parameter the model must infer), or the fixed actuator_gain when range is None.
+            ep_gain = float(rng.uniform(*gain_range)) if gain_range is not None else actuator_gain
             frames, states, actions, termination = run_episode(
                 rng,
                 max_steps=max_steps, grid_size=grid_size,
@@ -418,7 +426,7 @@ def collect_dataset(
                 v_mean=v_mean, v_std=v_std,
                 omega_mean=omega_mean, omega_std=omega_std,
                 marker=marker, nose_radius=nose_radius,
-                actuator_gain=actuator_gain,
+                actuator_gain=ep_gain,
             )
             if len(states) < min_length:
                 continue
@@ -427,6 +435,8 @@ def collect_dataset(
             for ds, block in ((frames_ds, frames), (states_ds, states), (actions_ds, actions)):
                 ds.resize(ds.shape[0] + L, axis=0)
                 ds[-L:] = block
+            gains_ds.resize(gains_ds.shape[0] + L, axis=0)
+            gains_ds[-L:] = np.full(L, ep_gain, dtype=np.float32)
 
             episode_starts.append(total)
             episode_lengths.append(L)
@@ -452,6 +462,9 @@ def collect_dataset(
         f.attrs["render_marker"] = marker
         f.attrs["nose_radius"] = nose_radius
         f.attrs["actuator_gain"] = actuator_gain   # truth for the gray-box test: model's a_v should recover this
+        # per-episode gain range (the hidden parameter the model must infer); equal bounds = fixed gain
+        f.attrs["gain_lo"] = float(gain_range[0]) if gain_range is not None else actuator_gain
+        f.attrs["gain_hi"] = float(gain_range[1]) if gain_range is not None else actuator_gain
         f.attrs["v_mean"] = v_mean
         f.attrs["v_std"] = v_std
         f.attrs["omega_mean"] = omega_mean
