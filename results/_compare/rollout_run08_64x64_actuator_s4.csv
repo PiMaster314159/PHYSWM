@@ -1,43 +1,56 @@
 model,horizon_transitions,horizon_simsteps,pos_err,theta_mae_deg
-ego (learnable a_v),0,0,0.0343,2.8962
-ego (learnable a_v),1,4,0.0354,2.9253
-ego (learnable a_v),2,8,0.0372,2.9185
-ego (learnable a_v),3,12,0.0371,3.0196
-ego (learnable a_v),4,16,0.0383,3.0861
-ego (learnable a_v),5,20,0.0404,2.9810
-ego (learnable a_v),6,24,0.0435,3.0834
-ego (learnable a_v),7,28,0.0476,3.1742
-ego (learnable a_v),8,32,0.0501,3.2261
-ego (learnable a_v),9,36,0.0533,3.2671
-ego (learnable a_v),10,40,0.0578,3.3792
-ego (learnable a_v),11,44,0.0627,3.4692
-ego (learnable a_v),12,48,0.0685,3.4807
-residual JEPA + anchor,0,0,0.1640,9.7848
-residual JEPA + anchor,1,4,0.1567,9.1836
-residual JEPA + anchor,2,8,0.1634,8.9317
-residual JEPA + anchor,3,12,0.1834,9.7752
-residual JEPA + anchor,4,16,0.2050,10.5829
-residual JEPA + anchor,5,20,0.2215,11.0479
-residual JEPA + anchor,6,24,0.2350,11.7060
-residual JEPA + anchor,7,28,0.2460,13.4988
-residual JEPA + anchor,8,32,0.2383,14.5050
-residual JEPA + anchor,9,36,0.2688,14.3919
-residual JEPA + anchor,10,40,0.3176,17.3430
-residual JEPA + anchor,11,44,0.3477,18.6995
-residual JEPA + anchor,12,48,0.3792,17.6714
-residual JEPA + readout,0,0,0.1397,2.8264
-residual JEPA + readout,1,4,0.1523,3.2219
-residual JEPA + readout,2,8,0.1673,4.1986
-residual JEPA + readout,3,12,0.1881,6.0224
-residual JEPA + readout,4,16,0.1968,6.9888
-residual JEPA + readout,5,20,0.2055,8.4521
-residual JEPA + readout,6,24,0.2120,8.6062
-residual JEPA + readout,7,28,0.2087,7.9532
-residual JEPA + readout,8,32,0.2105,9.5781
-residual JEPA + readout,9,36,0.2160,9.4235
-residual JEPA + readout,10,40,0.2186,10.4044
-residual JEPA + readout,11,44,0.2377,10.3383
-residual JEPA + readout,12,48,0.2640,12.4859
+"ego (single-step, a_v~0.79)",0,0,0.0343,2.8962
+"ego (single-step, a_v~0.79)",1,4,0.0354,2.9253
+"ego (single-step, a_v~0.79)",2,8,0.0372,2.9185
+"ego (single-step, a_v~0.79)",3,12,0.0371,3.0196
+"ego (single-step, a_v~0.79)",4,16,0.0383,3.0861
+"ego (single-step, a_v~0.79)",5,20,0.0404,2.9810
+"ego (single-step, a_v~0.79)",6,24,0.0435,3.0834
+"ego (single-step, a_v~0.79)",7,28,0.0476,3.1742
+"ego (single-step, a_v~0.79)",8,32,0.0501,3.2261
+"ego (single-step, a_v~0.79)",9,36,0.0533,3.2671
+"ego (single-step, a_v~0.79)",10,40,0.0578,3.3792
+"ego (single-step, a_v~0.79)",11,44,0.0627,3.4692
+"ego (single-step, a_v~0.79)",12,48,0.0685,3.4807
+"ego (rollout-trained, a_v~0.70)",0,0,0.0931,3.5198
+"ego (rollout-trained, a_v~0.70)",1,4,0.0926,3.5036
+"ego (rollout-trained, a_v~0.70)",2,8,0.0923,3.5021
+"ego (rollout-trained, a_v~0.70)",3,12,0.0927,3.3541
+"ego (rollout-trained, a_v~0.70)",4,16,0.0937,3.3851
+"ego (rollout-trained, a_v~0.70)",5,20,0.0938,3.3178
+"ego (rollout-trained, a_v~0.70)",6,24,0.0962,3.4348
+"ego (rollout-trained, a_v~0.70)",7,28,0.0985,3.3667
+"ego (rollout-trained, a_v~0.70)",8,32,0.0978,3.4631
+"ego (rollout-trained, a_v~0.70)",9,36,0.1000,3.6368
+"ego (rollout-trained, a_v~0.70)",10,40,0.1029,3.5677
+"ego (rollout-trained, a_v~0.70)",11,44,0.1069,3.6581
+"ego (rollout-trained, a_v~0.70)",12,48,0.1109,3.7521
+residual JEPA + anchor,0,0,0.2148,9.8215
+residual JEPA + anchor,1,4,0.2031,8.4752
+residual JEPA + anchor,2,8,0.2135,8.2196
+residual JEPA + anchor,3,12,0.2412,9.7010
+residual JEPA + anchor,4,16,0.2734,10.2613
+residual JEPA + anchor,5,20,0.2937,11.3260
+residual JEPA + anchor,6,24,0.3116,11.6576
+residual JEPA + anchor,7,28,0.3197,12.5120
+residual JEPA + anchor,8,32,0.3145,14.8263
+residual JEPA + anchor,9,36,0.3589,14.1142
+residual JEPA + anchor,10,40,0.4210,16.7258
+residual JEPA + anchor,11,44,0.4538,17.8601
+residual JEPA + anchor,12,48,0.4760,18.2160
+residual JEPA + readout,0,0,0.1168,3.7181
+residual JEPA + readout,1,4,0.1193,3.8778
+residual JEPA + readout,2,8,0.1265,4.2440
+residual JEPA + readout,3,12,0.1444,5.0620
+residual JEPA + readout,4,16,0.1509,5.4546
+residual JEPA + readout,5,20,0.1584,6.8640
+residual JEPA + readout,6,24,0.1547,7.2763
+residual JEPA + readout,7,28,0.1649,7.2374
+residual JEPA + readout,8,32,0.1834,8.4810
+residual JEPA + readout,9,36,0.1912,9.0537
+residual JEPA + readout,10,40,0.1795,9.6874
+residual JEPA + readout,11,44,0.1830,9.7775
+residual JEPA + readout,12,48,0.1921,11.3846
 grounded (locked gain),0,0,0.0225,2.6384
 grounded (locked gain),1,4,0.0196,2.6384
 grounded (locked gain),2,8,0.0333,2.6384

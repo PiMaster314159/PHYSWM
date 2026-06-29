@@ -89,12 +89,16 @@ class HiddenEgoWorldModel(nn.Module):
     """Encoder(stack) -> [pose | hidden]; dynamics with a_v = exp(head(hidden)); renderer on pose."""
 
     def __init__(self, grid_size: int = GRID_SIZE, dt: float = DT, channels: tuple = ENCODER_CHANNELS,
-                 stack: int = STACK, hidden_dim: int = HIDDEN_DIM, renderer_hidden: int = 512):
+                 stack: int = STACK, hidden_dim: int = HIDDEN_DIM, renderer_hidden: int = 512,
+                 av_max: float = 2.0):
         super().__init__()
         self.dt, self.stack, self.hidden_dim = dt, stack, hidden_dim
+        self.av_max = av_max
         self.encoder  = HiddenStateEncoder(grid_size, channels, stack, hidden_dim)
         self.renderer = Renderer(STATE_DIM, grid_size, renderer_hidden)   # renders from the 4 pose dims
-        # a_v = exp(head(hidden)); zero-init -> a_v = 1 at start (known kinematics), only learns to deviate
+        # a_v = av_max * sigmoid(head(hidden)): BOUNDED in (0, av_max) so it can't run away like exp().
+        # zero-init head -> sigmoid(0)=0.5 -> a_v starts at av_max/2 = 1.0 (known kinematics); the gain
+        # range [0.5,1.0] sits inside the bound, and the model only learns to read it out of h.
         self.av_head = nn.Linear(hidden_dim, 1)
         nn.init.zeros_(self.av_head.weight); nn.init.zeros_(self.av_head.bias)
 
@@ -102,7 +106,7 @@ class HiddenEgoWorldModel(nn.Module):
         return self.encoder(frames)
 
     def gain(self, state: torch.Tensor) -> torch.Tensor:
-        return self.av_head(state[:, 4:]).exp()        # (B,1) per-sample speed scale
+        return self.av_max * torch.sigmoid(self.av_head(state[:, 4:]))   # (B,1) in (0, av_max), starts at av_max/2
 
     def render(self, state: torch.Tensor) -> torch.Tensor:
         return self.renderer(state[:, :4])

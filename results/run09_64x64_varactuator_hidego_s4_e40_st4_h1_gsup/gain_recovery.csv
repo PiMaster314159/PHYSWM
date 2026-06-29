@@ -1,0 +1,2 @@
+corr,mae,pred_mean,true_min,true_max
+0.0239,0.1186,0.6914,0.5006,0.9996
