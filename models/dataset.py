@@ -307,6 +307,92 @@ def make_history_dataloaders(
     return train_dl, val_dl
 
 
+class HistoryRolloutWindows(Dataset):
+    """Stack-aware open-loop rollout windows for the hidden-ego model. Each example carries a STACK
+    of `stack` frames (at stride `step`) ending at the start, plus the action history over that
+    stack (to encode pose_0 AND the hidden gain a_v); then K held actions to roll the dynamics
+    forward, the true poses at horizons 0..K, and the per-episode true gain. Window starts need
+    both the (stack-1)*step history before them and K*step successors after."""
+
+    def __init__(self, h5_path, episodes=None, stack: int = 4, K: int = 8, step: int = PRED_STEP):
+        with h5py.File(h5_path, "r") as f:
+            self.frames  = f["frames"][:]
+            self.actions = f["actions"][:]
+            self.states  = f["states"][:]
+            self.gains   = f["gains"][:] if "gains" in f else None
+            starts  = f["episode_starts"][:]
+            lengths = f["episode_lengths"][:]
+            self.grid_size = int(f.attrs["grid_size"])
+            hold_k = int(f.attrs["hold_k"])
+        if step > 1 and hold_k % step != 0:
+            raise ValueError(f"step {step} must divide hold_k {hold_k}")
+        if episodes is not None:
+            episodes = np.asarray(episodes, dtype=np.int64)
+            starts, lengths = starts[episodes], lengths[episodes]
+        self.stack, self.K, self.step = stack, K, step
+        need = (stack - 1) * step                        # history before the start
+        chunks = []
+        for s, n in zip(starts, lengths):
+            lo, hi = int(s) + need, int(s) + n - 1 - K * step   # start needs history AND K successors
+            if hi >= lo:
+                chunks.append(np.arange(lo, hi + 1, step))
+        self.index = np.concatenate(chunks) if chunks else np.empty(0, dtype=np.int64)
+
+    def __len__(self) -> int:
+        return len(self.index)
+
+    def _stack_at(self, end: int) -> torch.Tensor:
+        step, K = self.step, self.stack
+        frs = [self.frames[end - (K - 1 - k) * step] for k in range(K)]
+        return torch.from_numpy(np.stack(frs)).to(torch.float32)          # (stack, H, W)
+
+    def _actions_at(self, end: int) -> torch.Tensor:
+        step, K = self.step, self.stack
+        acts = [self.actions[end - (K - 1 - k) * step] for k in range(K)]
+        return torch.from_numpy(np.stack(acts)).to(torch.float32)          # (stack, ACTION_DIM)
+
+    def __getitem__(self, idx: int) -> dict:
+        b, step, K = int(self.index[idx]), self.step, self.K
+        roll_actions = torch.stack([torch.from_numpy(self.actions[b + k * step]).to(torch.float32)
+                                    for k in range(K)])                     # (K, ACTION_DIM)
+        poses = torch.stack([torch.from_numpy(self.states[b + k * step]).to(torch.float32)
+                             for k in range(K + 1)])                        # (K+1, 3) true (x,y,theta)
+        sample = {
+            "frame":        self._stack_at(b),
+            "action_hist":  self._actions_at(b),
+            "roll_actions": roll_actions,
+            "poses":        poses,
+        }
+        if self.gains is not None:
+            sample["gain"] = torch.tensor([float(self.gains[b])], dtype=torch.float32)   # (1,)
+        return sample
+
+
+def make_history_rollout_dataloaders(
+    h5_path: Union[str, Path],
+    batch_size: int = BATCH_SIZE,
+    val_frac: float = 0.1,
+    seed: int = SEED,
+    stack: int = 4,
+    K: int = 8,
+    num_workers: int = 0,
+    step: int = PRED_STEP,
+) -> tuple:
+    """Stack-aware rollout loaders with the SAME episode-level split as make_history_dataloaders
+    (so the val episodes match the held-out set the model was selected on)."""
+    with h5py.File(h5_path, "r") as f:
+        n_ep = len(f["episode_starts"])
+    rng   = np.random.default_rng(seed)
+    perm  = rng.permutation(n_ep)
+    n_val = int(round(val_frac * n_ep))
+    val_ep, train_ep = perm[:n_val], perm[n_val:]
+    train_ds = HistoryRolloutWindows(h5_path, episodes=train_ep, stack=stack, K=K, step=step)
+    val_ds   = HistoryRolloutWindows(h5_path, episodes=val_ep,   stack=stack, K=K, step=step)
+    train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    return train_dl, val_dl
+
+
 def make_dataloaders(
     h5_path: Union[str, Path],
     batch_size: int = BATCH_SIZE,
