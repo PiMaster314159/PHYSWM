@@ -95,6 +95,17 @@ def build_neural(name, a):
     model.load_state_dict(sd, strict=False)
     model = model.to(dev).eval()
 
+    # JEPA's readout head outputs STANDARDIZED pose (run.py trains it against (pose-mean)/std).
+    # Recover the train-set stats so pose() can invert it back to world units [0,1] + true heading.
+    anchor_mean = anchor_std = None
+    if not physical:
+        import h5py
+        from models.jepa import state_to_target
+        with h5py.File(C.DATASETS_DIR / f"{a.run}.h5", "r") as f:
+            states = torch.from_numpy(f["states"][:]).float()
+        T = state_to_target(states)
+        anchor_mean = T.mean(0).numpy(); anchor_std = (T.std(0) + 1e-6).numpy()
+
     def to_frame(frame):
         return torch.from_numpy(np.asarray(frame, np.float32)).view(1, 1, g, g).to(dev)
 
@@ -121,7 +132,8 @@ def build_neural(name, a):
         @torch.no_grad()
         def pose(S):                                  # latent -> pose via the readout PROBE
             z = torch.from_numpy(S.astype(np.float32)).to(dev)
-            p = model.state_head(z).cpu().numpy()      # (K,4) [x,y,cos,sin] (may need de-standardizing)
+            p = model.state_head(z).cpu().numpy()      # (K,4) STANDARDIZED [x,y,cos,sin]
+            p = p * anchor_std + anchor_mean           # invert standardization -> world units
             return pose_from_xycs(p)
 
     return observe, dynamics, pose, latent_dim, label
@@ -178,6 +190,8 @@ def parse_args():
                    help="shortcut when running a single --model")
     p.add_argument("--grid-size", type=int, default=64)
     p.add_argument("--marker", default="ring")
+    p.add_argument("--run", default="run07_64x64_ring",
+                   help="dataset whose pose stats de-standardize the JEPA readout (match its training data)")
     p.add_argument("--dt", type=float, default=C.DT)
     p.add_argument("--v", type=float, default=0.4, help="fixed forward speed (world [0,1] units)")
     p.add_argument("--track-width", type=float, default=0.4, help="track width (|y - y_c| <= W/2)")
