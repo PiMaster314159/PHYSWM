@@ -25,8 +25,8 @@ import torch.nn.functional as F
 torch.set_num_threads(4)
 
 import config as C
-from models.hidden_ego import HiddenEgoWorldModel, hidden_ego_loss
-from models.dataset import make_history_dataloaders
+from models.hidden_ego import HiddenEgoWorldModel, hidden_ego_loss, hidden_ego_rollout_loss
+from models.dataset import make_history_dataloaders, make_history_rollout_dataloaders
 
 
 def state_to_target(states):
@@ -41,7 +41,8 @@ def extract(model, dl, device):
     S, G, T, GT = [], [], [], []
     for b in dl:
         s = model.encode(b["frame"].to(device), b["action_hist"].to(device))
-        S.append(s.cpu()); G.append(model.gain(s).cpu()); T.append(b["state"])
+        S.append(s.cpu()); G.append(model.gain(s).cpu())
+        T.append(b["state"] if "state" in b else b["poses"][:, 0])   # rollout loader carries poses, not state
         if "gain" in b:
             GT.append(b["gain"])
     S, G, T = torch.cat(S), torch.cat(G), torch.cat(T)
@@ -74,6 +75,21 @@ def val_total(model, dl, device, a):
     return sum(tot) / max(len(tot), 1)
 
 
+@torch.no_grad()
+def val_total_rollout(model, dl, device, a):
+    model.eval(); tot = []
+    for i, b in enumerate(dl):
+        if i >= 50:
+            break
+        _, parts = hidden_ego_rollout_loss(model, b["frame"].to(device), b["action_hist"].to(device),
+                                           b["roll_actions"].to(device), b["poses"].to(device),
+                                           b["gain"].to(device) if "gain" in b else None,
+                                           a.lam_recon, a.recon_fg_weight, a.lam_anchor, a.lam_rollout, a.lam_gain)
+        tot.append(parts["total"])
+    model.train()
+    return sum(tot) / max(len(tot), 1)
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Train + evaluate the hidden-state ego model.")
     p.add_argument("--run", default=C.RUN)
@@ -87,6 +103,10 @@ def parse_args():
     p.add_argument("--recon-fg-weight", type=float, default=5.0)
     p.add_argument("--lam-anchor", type=float, default=1.0, help="anchor the 4 pose dims to true pose")
     p.add_argument("--lam-anchor-pred", type=float, default=1.0, help="anchor the PREDICTED next pose")
+    p.add_argument("--rollout-k", type=int, default=1,
+                   help=">1 switches to K-step OPEN-LOOP rollout training (anchor the accumulated pose); "
+                        "1 = the default single-step training")
+    p.add_argument("--lam-rollout", type=float, default=1.0, help="weight on the K-step rollout pose anchor")
     p.add_argument("--lam-gain", type=float, default=0.0,
                    help="SUPERVISE a_v=g(h) against the true per-episode gain. 0 = unsupervised (probe h afterward)")
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
@@ -101,6 +121,8 @@ def main():
     a = parse_args()
     tag = f"hidego_s{a.pred_step}_e{a.epochs}_st{a.stack}_h{a.hidden_dim}"
     tag += "_gsup" if a.lam_gain > 0 else "_gunsup"
+    if a.rollout_k > 1:
+        tag += f"_roll{a.rollout_k}"
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
     ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
@@ -114,9 +136,15 @@ def main():
           f"gain={'SUPERVISED' if a.lam_gain > 0 else 'unsupervised'}")
 
     torch.manual_seed(C.SEED)
-    train_dl, val_dl = make_history_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
-                                                stack=a.stack, step=a.pred_step)
-    print(f"{len(train_dl.dataset)} train windows, {len(val_dl.dataset)} val")
+    rollout = a.rollout_k > 1
+    if rollout:
+        train_dl, val_dl = make_history_rollout_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
+                                                            stack=a.stack, K=a.rollout_k, step=a.pred_step)
+    else:
+        train_dl, val_dl = make_history_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
+                                                    stack=a.stack, step=a.pred_step)
+    print(f"{len(train_dl.dataset)} train windows, {len(val_dl.dataset)} val"
+          + (f"  (K={a.rollout_k}-step rollout training)" if rollout else ""))
     model = HiddenEgoWorldModel(grid_size=a.grid_size, dt=a.pred_step * C.DT,
                                 stack=a.stack, hidden_dim=a.hidden_dim).to(a.device).train()
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
@@ -125,25 +153,37 @@ def main():
     train_hist, val_hist = [], []
     for epoch in range(a.epochs):
         for b in train_dl:
-            frame, nxt = b["frame"].to(a.device), b["next_frame"].to(a.device)
-            out = model(frame, b["action_hist"].to(a.device), b["action"].to(a.device),
-                        nxt, b["next_action_hist"].to(a.device))
-            loss, parts = hidden_ego_loss(out, frame, nxt,
-                                          state_to_target(b["state"]).to(a.device),
-                                          state_to_target(b["next_state"]).to(a.device),
-                                          b["gain"].to(a.device) if "gain" in b else None,
-                                          a.lam_recon, a.lam_dyn, a.lam_pred, a.recon_fg_weight,
-                                          a.lam_anchor, a.lam_anchor_pred, a.lam_gain)
+            if rollout:
+                loss, parts = hidden_ego_rollout_loss(model, b["frame"].to(a.device), b["action_hist"].to(a.device),
+                                                      b["roll_actions"].to(a.device), b["poses"].to(a.device),
+                                                      b["gain"].to(a.device) if "gain" in b else None,
+                                                      a.lam_recon, a.recon_fg_weight, a.lam_anchor,
+                                                      a.lam_rollout, a.lam_gain)
+            else:
+                frame, nxt = b["frame"].to(a.device), b["next_frame"].to(a.device)
+                out = model(frame, b["action_hist"].to(a.device), b["action"].to(a.device),
+                            nxt, b["next_action_hist"].to(a.device))
+                loss, parts = hidden_ego_loss(out, frame, nxt,
+                                              state_to_target(b["state"]).to(a.device),
+                                              state_to_target(b["next_state"]).to(a.device),
+                                              b["gain"].to(a.device) if "gain" in b else None,
+                                              a.lam_recon, a.lam_dyn, a.lam_pred, a.recon_fg_weight,
+                                              a.lam_anchor, a.lam_anchor_pred, a.lam_gain)
+                parts["a_v"] = out["gain"].mean().item()
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             opt.step(); step += 1
             if step % 50 == 0:
-                av_mean = out["gain"].mean().item()
-                train_hist.append({"step": step, "epoch": epoch + 1, **parts, "a_v_mean": av_mean})
-                print(f"  step {step:5d}  total {parts['total']:.4f}  recon {parts['recon']:.4f}  "
-                      f"dyn {parts['dyn']:.4f}  anchor {parts['anchor']:.4f}  "
-                      f"anchor_pred {parts['anchor_pred']:.4f}  gain {parts['gain']:.4f}  a_v {av_mean:.3f}")
-        v = val_total(model, val_dl, a.device, a)
+                train_hist.append({"step": step, "epoch": epoch + 1, **parts})
+                if rollout:
+                    print(f"  step {step:5d}  total {parts['total']:.4f}  recon {parts['recon']:.4f}  "
+                          f"anchor {parts['anchor']:.4f}  rollout {parts['rollout']:.4f}  "
+                          f"gain {parts['gain']:.4f}  a_v {parts['a_v']:.3f}")
+                else:
+                    print(f"  step {step:5d}  total {parts['total']:.4f}  recon {parts['recon']:.4f}  "
+                          f"dyn {parts['dyn']:.4f}  anchor {parts['anchor']:.4f}  "
+                          f"anchor_pred {parts['anchor_pred']:.4f}  gain {parts['gain']:.4f}  a_v {parts['a_v']:.3f}")
+        v = val_total_rollout(model, val_dl, a.device, a) if rollout else val_total(model, val_dl, a.device, a)
         val_hist.append({"epoch": epoch + 1, "step": step, "val_total": v})
         print(f"epoch {epoch+1}/{a.epochs}  val total {v:.4f}")
         if v < best:
@@ -153,15 +193,16 @@ def main():
         with open(path, "w", newline="") as f:
             w = csv.writer(f); w.writerow(cols)
             for r in rows:
-                w.writerow([r[c] for c in cols])
-    _write_csv(report_dir / "train_history.csv", train_hist,
-               ["step", "epoch", "total", "recon", "dyn", "pred_recon", "anchor", "anchor_pred", "gain", "a_v_mean"])
+                w.writerow([r.get(c, "") for c in cols])
+    train_cols = (["step", "epoch", "total", "recon", "anchor", "rollout", "gain", "a_v"] if rollout
+                  else ["step", "epoch", "total", "recon", "dyn", "pred_recon", "anchor", "anchor_pred", "gain", "a_v"])
+    _write_csv(report_dir / "train_history.csv", train_hist, train_cols)
     _write_csv(report_dir / "val_history.csv", val_hist, ["epoch", "step", "val_total"])
     print(f"wrote train_history.csv ({len(train_hist)} rows) + val_history.csv")
 
     model.load_state_dict(torch.load(ckpt_path, map_location=a.device, weights_only=True))
 
-    # ---- evaluation ----
+    # ---- evaluation (pose + hidden gain readout, on the same val windows) ----
     S, G, T, GT = extract(model, val_dl, a.device)
     Ttarg = state_to_target(T)
     deg = 180.0 / torch.pi

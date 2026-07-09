@@ -166,3 +166,39 @@ def hidden_ego_loss(out: dict, frame: torch.Tensor, next_frame: torch.Tensor,
              "anchor": anchor.item(), "anchor_pred": anchor_pred.item(), "gain": gain.item(),
              "total": total.item()}
     return total, parts
+
+
+def _poses_to_targets(poses: torch.Tensor) -> torch.Tensor:
+    """(B, T, 3) true [x, y, theta] -> (B, T, 4) [x, y, cos, sin]."""
+    x, y, th = poses[..., 0], poses[..., 1], poses[..., 2]
+    return torch.stack([x, y, torch.cos(th), torch.sin(th)], dim=-1)
+
+
+def hidden_ego_rollout_loss(model, frames: torch.Tensor, action_hist: torch.Tensor,
+                            roll_actions: torch.Tensor, poses: torch.Tensor,
+                            true_gain: torch.Tensor = None, lam_recon: float = 1.0,
+                            recon_fg_weight: float = 5.0, lam_anchor: float = 1.0,
+                            lam_rollout: float = 1.0, lam_gain: float = 0.0) -> tuple:
+    """K-step OPEN-LOOP rollout training. Encode the stack once (pose_0 + a_v), then chain the
+    gray-box dynamics K steps on the TRUE actions and anchor the ACCUMULATED pose at every horizon
+    to the true pose. The per-episode gain is identifiable in accumulated motion (not in one step),
+    so this pins a_v where the 1-step anchor cannot. a_v is the hidden dim carried through the roll,
+    so a single encoded value drives the whole horizon (exactly the inference-time use).
+
+    frames (B,stack,H,W), action_hist (B,stack,A), roll_actions (B,K,A), poses (B,K+1,3) true (x,y,theta).
+    """
+    s = model.encode(frames, action_hist)                       # (B, 5) = [pose | hidden]
+    targ = _poses_to_targets(poses)                             # (B, K+1, 4)
+    recon  = _img_loss(model.render(s), frames[:, -1:], recon_fg_weight)   # newest frame == pose_0
+    anchor = F.mse_loss(s[:, :4], targ[:, 0]) if (lam_anchor > 0) else s.new_zeros(())
+    K = roll_actions.shape[1]
+    cur, roll = s, s.new_zeros(())
+    for k in range(K):
+        cur = model.step(cur, roll_actions[:, k])               # carries a_v forward unchanged
+        roll = roll + F.mse_loss(cur[:, :4], targ[:, k + 1])
+    roll = roll / max(K, 1)
+    gain = F.mse_loss(model.gain(s), true_gain) if (lam_gain > 0 and true_gain is not None) else s.new_zeros(())
+    total = lam_recon * recon + lam_anchor * anchor + lam_rollout * roll + lam_gain * gain
+    parts = {"recon": recon.item(), "anchor": anchor.item(), "rollout": roll.item(),
+             "gain": gain.item(), "total": total.item(), "a_v": model.gain(s).mean().item()}
+    return total, parts
