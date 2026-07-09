@@ -264,7 +264,8 @@ class GroundedJEPA(nn.Module):
 def grounded_loss(out: dict, frame: torch.Tensor, block_dim: int = PHYSICS_BLOCK_DIM,
                   lam: float = 0.005, lam_recon: float = 0.0, recon_fg_weight: float = 0.0,
                   pred_block_weight: float = 1.0,
-                  s_target: torch.Tensor = None, lam_anchor: float = 0.0) -> tuple:
+                  s_target: torch.Tensor = None, lam_anchor: float = 0.0,
+                  s_next_target: torch.Tensor = None, lam_anchor_pred: float = 0.0) -> tuple:
     """Prediction MSE + SIGReg (FREE dims only) + optional recon + optional block anchor.
 
     ANCHOR (lam_anchor > 0): pull the block (dims 0..block_dim-1) toward true pose
@@ -315,6 +316,16 @@ def grounded_loss(out: dict, frame: torch.Tensor, block_dim: int = PHYSICS_BLOCK
         anchor = F.mse_loss(out["z"][:, :block_dim], s_target)
         total = total + lam_anchor * anchor
         parts["anchor"] = anchor.item()
+
+    # anchor_pred: pull the PREDICTED next block (kinematic step of the encoded block) toward the
+    # true next pose. Mirrors the ego model. This is a DIRECT, dynamics-based heading signal that
+    # works at any pred_step - unlike the plain prediction loss on the block, whose heading signal
+    # is proportional to per-step displacement and so goes to zero at pred_step=1. It also pins a_v
+    # (the predicted position must land on the true next position), fixing the a_v collapse.
+    if lam_anchor_pred > 0 and s_next_target is not None:
+        anchor_pred = F.mse_loss(out["pred_next_z"][:, :block_dim], s_next_target)
+        total = total + lam_anchor_pred * anchor_pred
+        parts["anchor_pred"] = anchor_pred.item()
 
     parts["total"] = total.item()
     return total, parts

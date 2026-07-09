@@ -54,6 +54,8 @@ def parse_args():
                    help="foreground weighting of recon (bg_mean + w*fg_mean); decoder lever (grounds position)")
     p.add_argument("--lam-anchor", type=float, default=0.0,
                    help="privileged state anchor on the SIGReg-free block (raw pose); tests if the exempt dims encode pose properly under direct supervision")
+    p.add_argument("--lam-anchor-pred", type=float, default=0.0,
+                   help="anchor the PREDICTED next block to the true next pose (like the ego model); grounds heading + a_v through the dynamics at any pred_step (the s1 heading fix)")
     p.add_argument("--pred-block-weight", type=float, default=C.PRED_BLOCK_WEIGHT,
                    help="weight on block dims in the prediction loss; physics-consistency strength (the heading lever)")
     p.add_argument("--learn-coeffs", action="store_true",
@@ -92,6 +94,7 @@ def main():
     if a.recon_fg_weight > 0: tag += f"_fg{a.recon_fg_weight:g}"
     if a.pred_block_weight != 1.0: tag += f"_pb{a.pred_block_weight:g}"
     if a.lam_anchor > 0:   tag += f"_anc{a.lam_anchor:g}"
+    if a.lam_anchor_pred > 0: tag += f"_ancp{a.lam_anchor_pred:g}"
     if a.learn_coeffs:     tag += "_learn"
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
@@ -107,7 +110,7 @@ def main():
           f"lock_block={a.lock_block}  budget={a.block_budget}  lam_recon={a.lam_recon}")
 
     torch.manual_seed(C.SEED)
-    need_state = a.lam_anchor > 0     # privileged block anchor needs true pose during training
+    need_state = a.lam_anchor > 0 or a.lam_anchor_pred > 0   # anchors need true pose during training
     train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
                                         return_state=need_state, step=a.pred_step)
     model = GroundedJEPA(
@@ -124,11 +127,13 @@ def main():
         for b in train_dl:
             frame = b["frame"].to(a.device)
             out   = model(frame, b["action"].to(a.device), b["next_frame"].to(a.device))
-            s_tgt = state_to_target(b["state"]).to(a.device) if need_state else None
+            s_tgt      = state_to_target(b["state"]).to(a.device) if need_state else None
+            s_next_tgt = state_to_target(b["next_state"]).to(a.device) if need_state else None
             loss, parts = grounded_loss(out, frame, block_dim=a.block_dim, lam=a.lam,
                                         lam_recon=a.lam_recon, recon_fg_weight=a.recon_fg_weight,
                                         pred_block_weight=a.pred_block_weight,
-                                        s_target=s_tgt, lam_anchor=a.lam_anchor)
+                                        s_target=s_tgt, lam_anchor=a.lam_anchor,
+                                        s_next_target=s_next_tgt, lam_anchor_pred=a.lam_anchor_pred)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)   # governor on the block feedback loop
@@ -140,8 +145,9 @@ def main():
                 free_std = z[:, a.block_dim:].std(0).mean().item()
                 rec = f" recon {parts['recon']:.4f}" if "recon" in parts else ""
                 anc = f" anchor {parts['anchor']:.4f}" if "anchor" in parts else ""
+                ancp = f" ancp {parts['anchor_pred']:.4f}" if "anchor_pred" in parts else ""
                 print(f"  step {step:5d}  total {parts['total']:.4f}  pred {parts['pred']:.4f}  "
-                      f"pred_blk {parts['pred_block']:.4f}  sigreg {parts['sigreg']:.4f}{rec}{anc}  "
+                      f"pred_blk {parts['pred_block']:.4f}  sigreg {parts['sigreg']:.4f}{rec}{anc}{ancp}  "
                       f"block_std {blk_std:.3f}  free_std {free_std:.3f}")
 
         v = val_pred(model, val_dl, a.device)
