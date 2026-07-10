@@ -64,6 +64,9 @@ def parse_args():
                    help="privileged state anchor on the first 4 latent dims (standardized pose). 0 = off (pure SIGReg JEPA)")
     p.add_argument("--lam-readout", type=float, default=0.0,
                    help="privileged state via a LINEAR readout head over the whole latent (does not fight SIGReg; code stays distributed). 0 = off")
+    p.add_argument("--lam-readout-pred", type=float, default=0.0,
+                   help="privileged pose readout on the PREDICTED next latent (probe o predictor -> true next pose). "
+                        "Trains exactly what the world-model MPC decodes; the JEPA analogue of ego/grounded anchor_pred. 0 = off")
     # training
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
     p.add_argument("--lr", type=float, default=C.LR)
@@ -81,7 +84,7 @@ def build_model(a) -> JEPA:
     """A JEPA in the requested mode, with the physics dt matched to the horizon."""
     m = JEPA(grid_size=a.grid_size, latent_dim=a.latent_dim,
              predictor_mode=a.predictor_mode, predictor_lock_pose=a.lock_pose,
-             state_head=a.lam_readout > 0)
+             state_head=(a.lam_readout > 0 or a.lam_readout_pred > 0))
     m.predictor.dt = a.pred_step * C.DT   # physics integrates over the full horizon; no-op for mlp/residual
     return m
 
@@ -96,6 +99,7 @@ def main():
         if a.lock_pose:     tag += "_lock"
     if a.lam_anchor > 0:    tag += f"_anc{a.lam_anchor:g}"
     if a.lam_readout > 0:   tag += f"_rd{a.lam_readout:g}"
+    if a.lam_readout_pred > 0: tag += f"_rdp{a.lam_readout_pred:g}"
     experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
     ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
@@ -112,7 +116,7 @@ def main():
 
     # train
     torch.manual_seed(C.SEED)
-    need_state = a.lam_anchor > 0 or a.lam_readout > 0   # privileged state loaded/standardized when supervising
+    need_state = a.lam_anchor > 0 or a.lam_readout > 0 or a.lam_readout_pred > 0   # privileged state loaded/standardized when supervising
     train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
                                         return_state=need_state, step=a.pred_step)
     anchor_mean = anchor_std = None
@@ -122,6 +126,7 @@ def main():
     model = build_model(a)
     history = train_jepa(model, train_dl, val_dl, epochs=a.epochs, lr=a.lr, lam=a.lam,
                          lam_phys=a.lam_phys, lam_anchor=a.lam_anchor, lam_readout=a.lam_readout,
+                         lam_readout_pred=a.lam_readout_pred,
                          anchor_mean=anchor_mean, anchor_std=anchor_std,
                          device=a.device, save_best_to=ckpt_path)
     plot_history(history, save_to=report_dir / "training_curve.png")

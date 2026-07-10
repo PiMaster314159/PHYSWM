@@ -118,6 +118,7 @@ def train_jepa(
     lam_phys: float = LAM_PHYS,
     lam_anchor: float = 0.0,
     lam_readout: float = 0.0,
+    lam_readout_pred: float = 0.0,
     anchor_mean: Optional[torch.Tensor] = None,
     anchor_std: Optional[torch.Tensor] = None,
     device: Optional[str] = None,
@@ -177,14 +178,20 @@ def train_jepa(
                 batch["action"].to(device),
                 batch["next_frame"].to(device),
             )
-            s_target = None
-            if (lam_anchor > 0 or lam_readout > 0) and "state" in batch:
+            s_target = s_next_target = None
+            if (lam_anchor > 0 or lam_readout > 0 or lam_readout_pred > 0) and "state" in batch:
                 t = state_to_target(batch["state"]).to(device)
                 if anchor_mean is not None:                  # standardize to match BN/SIGReg scale
                     t = (t - anchor_mean.to(device)) / anchor_std.to(device)
                 s_target = t
+                if lam_readout_pred > 0 and "next_state" in batch:   # same standardization, next pose
+                    tn = state_to_target(batch["next_state"]).to(device)
+                    if anchor_mean is not None:
+                        tn = (tn - anchor_mean.to(device)) / anchor_std.to(device)
+                    s_next_target = tn
             loss, parts = jepa_loss(out, lam=lam, lam_phys=lam_phys, s_target=s_target,
-                                    lam_anchor=lam_anchor, lam_readout=lam_readout)
+                                    lam_anchor=lam_anchor, lam_readout=lam_readout,
+                                    s_next_target=s_next_target, lam_readout_pred=lam_readout_pred)
 
             opt.zero_grad()
             loss.backward()
@@ -198,8 +205,9 @@ def train_jepa(
                 phys_str = f"  phys {parts['phys']:.4f}" if "phys" in parts else ""
                 anc_str  = f"  anchor {parts['anchor']:.4f}" if "anchor" in parts else ""
                 rd_str   = f"  readout {parts['readout']:.4f}" if "readout" in parts else ""
+                rdp_str  = f"  readout_pred {parts['readout_pred']:.4f}" if "readout_pred" in parts else ""
                 print(f"  step {step:5d}  total {parts['total']:.4f}  "
-                      f"pred {parts['pred']:.4f}  sigreg {parts['sigreg']:.4f}{phys_str}{anc_str}{rd_str}  "
+                      f"pred {parts['pred']:.4f}  sigreg {parts['sigreg']:.4f}{phys_str}{anc_str}{rd_str}{rdp_str}  "
                       f"latent_std {parts['latent_std']:.3f}")
 
         if val_dl is not None:

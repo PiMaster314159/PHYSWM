@@ -321,7 +321,8 @@ class JEPA(nn.Module):
         if self.predictor.mode == "physics":
             out["phys_next_z"] = self.predictor._physics_base(z, action)
         if self.state_head is not None:
-            out["state_hat"] = self.state_head(z)
+            out["state_hat"]      = self.state_head(z)            # probe on the encoded frame
+            out["state_hat_pred"] = self.state_head(pred_next_z)  # probe on the PREDICTED next latent
         return out
 
 
@@ -396,7 +397,8 @@ def state_to_target(states: torch.Tensor) -> torch.Tensor:
 
 def jepa_loss(out: dict, lam: float = 1.0, lam_phys: float = 0.0,
               s_target: torch.Tensor = None, lam_anchor: float = 0.0,
-              lam_readout: float = 0.0) -> tuple:
+              lam_readout: float = 0.0, s_next_target: torch.Tensor = None,
+              lam_readout_pred: float = 0.0) -> tuple:
     """LeWM training loss: prediction MSE + SIGReg (+ optional physics consistency
     + optional privileged state anchor).
 
@@ -444,6 +446,13 @@ def jepa_loss(out: dict, lam: float = 1.0, lam_phys: float = 0.0,
         readout = F.mse_loss(out["state_hat"], s_target)
         total = total + lam_readout * readout
         parts["readout"] = readout.item()
+
+    # readout on the PREDICTED next latent -> true next pose: trains exactly the map the
+    # MPC decodes (probe o predictor), the label-free JEPA analogue of ego/grounded anchor_pred.
+    if lam_readout_pred > 0 and "state_hat_pred" in out and s_next_target is not None:
+        readout_pred = F.mse_loss(out["state_hat_pred"], s_next_target)
+        total = total + lam_readout_pred * readout_pred
+        parts["readout_pred"] = readout_pred.item()
 
     parts["total"] = total.item()
     return total, parts
