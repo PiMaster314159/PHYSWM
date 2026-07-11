@@ -88,7 +88,7 @@ def val_pred(model, dl, device, max_batches=50):
 def main():
     a = parse_args()
 
-    tag = f"grounded_s{a.pred_step}_e{a.epochs}"
+    tag = f"s{a.pred_step}_e{a.epochs}"      # model ("grounded") is the folder, not the tag
     if not a.lock_block:   tag += f"_gray{a.block_budget:g}"
     if a.lam_recon > 0:    tag += f"_rec{a.lam_recon:g}"
     if a.recon_fg_weight > 0: tag += f"_fg{a.recon_fg_weight:g}"
@@ -96,11 +96,10 @@ def main():
     if a.lam_anchor > 0:   tag += f"_anc{a.lam_anchor:g}"
     if a.lam_anchor_pred > 0: tag += f"_ancp{a.lam_anchor_pred:g}"
     if a.learn_coeffs:     tag += "_learn"
-    experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
+    if a.note: tag += f"_{a.note}"
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
-    ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
-    report_dir = C.RESULTS_DIR / experiment
-    report_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_path, report_dir = C.experiment_paths(a.run, "grounded", tag)   # checkpoints/<run>/grounded/<tag>.pt
+    experiment = f"{a.run}/grounded/{tag}"                                # display name
 
     if not data_path.exists():
         raise SystemExit(f"dataset not found: {data_path} (this runner does not collect; build it first)")

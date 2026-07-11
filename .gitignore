@@ -1,3 +1,11 @@
 # Claude Code agent memory (local notes, not project source)
 memory/
 results/_deck
+
+# Archived (dead) experiments — kept on disk / OneDrive, out of git
+models/checkpoints/_archive/
+results/_archive/
+
+# Large regenerable binaries — backed up via OneDrive, not versioned in git
+*.pt
+data/datasets/*.h5

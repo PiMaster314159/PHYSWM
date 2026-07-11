@@ -100,11 +100,10 @@ def main():
     if a.lam_anchor > 0:    tag += f"_anc{a.lam_anchor:g}"
     if a.lam_readout > 0:   tag += f"_rd{a.lam_readout:g}"
     if a.lam_readout_pred > 0: tag += f"_rdp{a.lam_readout_pred:g}"
-    experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
+    if a.note: tag += f"_{a.note}"
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
-    ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
-    report_dir = C.RESULTS_DIR / experiment
-    report_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_path, report_dir = C.experiment_paths(a.run, "jepa", tag)   # checkpoints/<run>/jepa/<tag>.pt
+    experiment = f"{a.run}/jepa/{tag}"                                # display name
 
     print(f"=== {experiment} ===")
     phys_str = f"  lam_phys={a.lam_phys:g}  lock_pose={a.lock_pose}" if a.predictor_mode == "physics" else ""

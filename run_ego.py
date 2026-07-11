@@ -193,7 +193,7 @@ def rollout_val(model, dl, device, a, max_batches=50):
 
 def main():
     a = parse_args()
-    tag = f"ego_s{a.pred_step}_e{a.epochs}"
+    tag = f"s{a.pred_step}_e{a.epochs}"      # model ("ego") is the folder, not the tag
     if a.lam_dyn != 1.0:       tag += f"_ld{a.lam_dyn:g}"      # so different weights -> different folders
     if a.lam_pred != 1.0:      tag += f"_lp{a.lam_pred:g}"
     if a.lam_var > 0:          tag += f"_v{a.lam_var:g}"     # mark the variance-floor runs
@@ -205,11 +205,10 @@ def main():
     if a.rollout_k > 1:        tag += f"_roll{a.rollout_k}"   # multi-step rollout training
     if a.learn_coeffs:         tag += "_learn"
     tag += "_bc" if a.decoder == "broadcast" else "_mlpdec"   # decoder in the name -> own folder
-    experiment = f"{a.run}_{tag}" + (f"_{a.note}" if a.note else "")
+    if a.note: tag += f"_{a.note}"
     data_path  = C.DATASETS_DIR / f"{a.run}.h5"
-    ckpt_path  = C.CHECKPOINTS_DIR / f"{experiment}.pt"
-    report_dir = C.RESULTS_DIR / experiment
-    report_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_path, report_dir = C.experiment_paths(a.run, "ego", tag)   # checkpoints/<run>/ego/<tag>.pt
+    experiment = f"{a.run}/ego/{tag}"                                # display name
     if not data_path.exists():
         raise SystemExit(f"dataset not found: {data_path}")
 

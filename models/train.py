@@ -35,6 +35,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from typing import Optional, Union
 
+from models.components import state_to_target, sigreg_loss
 try:
     from models.jepa import JEPA, jepa_loss, sigreg_loss, state_to_target
     from models.dataset import make_dataloaders

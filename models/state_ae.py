@@ -29,6 +29,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from models.components import img_loss
+
 from config import GRID_SIZE, ENCODER_CHANNELS, IN_CHANNELS, ACTION_DIM, DT
 
 STATE_DIM = 4   # x, y, cos th, sin th
@@ -202,21 +204,6 @@ class EgoWorldModel(nn.Module):
         }
 
 
-def _img_loss(pred: torch.Tensor, target: torch.Tensor, fg_weight: float = 0.0) -> torch.Tensor:
-    """Reconstruction loss. fg_weight>0 averages error over lit (foreground) and black
-    (background) pixels SEPARATELY and re-weights: bg_mean + fg_weight * fg_mean. The
-    robot is ~0.4% of pixels, so plain MSE is dominated by the black background and
-    never bothers to reconstruct pose; this makes the loss actually about the object.
-    """
-    if fg_weight <= 0:
-        return F.mse_loss(pred, target)
-    err2 = (pred - target) ** 2
-    fg = (target > 0).float()
-    fg_mean = (err2 * fg).sum() / fg.sum().clamp(min=1.0)
-    bg_mean = (err2 * (1.0 - fg)).sum() / (1.0 - fg).sum().clamp(min=1.0)
-    return bg_mean + fg_weight * fg_mean
-
-
 def ego_loss(out: dict, frame: torch.Tensor, next_frame: torch.Tensor,
              lam_dyn: float = 1.0, lam_pred: float = 1.0,
              lam_var: float = 0.0, var_gamma: float = 0.1,
@@ -241,9 +228,9 @@ def ego_loss(out: dict, frame: torch.Tensor, next_frame: torch.Tensor,
     lam_recon scales the frame reconstruction so it can be dropped (lam_recon=0) once the
     anchor, not the decoder, is the thing grounding the state.
     """
-    recon = _img_loss(out["recon"], frame, recon_fg_weight)
+    recon = img_loss(out["recon"], frame, recon_fg_weight)
     dyn   = F.mse_loss(out["s_pred"], out["s_next"].detach())
-    pred  = _img_loss(out["pred_recon"], next_frame, recon_fg_weight)
+    pred  = img_loss(out["pred_recon"], next_frame, recon_fg_weight)
     std   = (out["s"].var(0) + 1e-4).sqrt()                 # per-dim std over the batch (grad-safe)
     var   = F.relu(var_gamma - std).mean()                  # > 0 only for dims below the floor
     anchor      = F.mse_loss(out["s"], s_target) if (lam_anchor > 0 and s_target is not None) \
@@ -276,7 +263,7 @@ def ego_rollout_loss(model, frame: torch.Tensor, actions: torch.Tensor, poses: t
         return torch.stack([p[:, 0], p[:, 1], torch.cos(p[:, 2]), torch.sin(p[:, 2])], dim=1)
 
     s      = model.encode(frame)
-    recon  = _img_loss(model.render(s), frame, recon_fg_weight)
+    recon  = img_loss(model.render(s), frame, recon_fg_weight)
     anchor = F.mse_loss(s, to_state(poses[:, 0]))     # ground the initial state
     K      = actions.shape[1]
     roll   = s.new_zeros(())

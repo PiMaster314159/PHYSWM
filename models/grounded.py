@@ -37,10 +37,7 @@ from config import (
     IN_CHANNELS, DT, PHYSICS_BLOCK_DIM,
 )
 
-try:
-    from models.jepa import sigreg_loss
-except ImportError:
-    from jepa import sigreg_loss
+from models.components import sigreg_loss
 
 
 # ## Encoder with a split head

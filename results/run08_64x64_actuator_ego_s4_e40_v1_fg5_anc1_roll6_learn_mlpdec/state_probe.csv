@@ -1,3 +1,0 @@
-probe,theta_flip_pct,theta_mae_deg,x_r2,y_r2
-linear,1.1211,8.4340,0.8610,0.8648
-mlp,1.0214,7.2903,0.9555,0.9471

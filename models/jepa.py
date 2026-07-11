@@ -26,6 +26,8 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").ex
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from models.components import sigreg_loss, state_to_target
+
 from config import (
     DATA_PATH, DT, PRED_STEP,
     GRID_SIZE, IN_CHANNELS, LATENT_DIM, ENCODER_CHANNELS,
@@ -335,64 +337,6 @@ class JEPA(nn.Module):
 # **SIGReg**: the Sketched-Isotropic-Gaussian Regularizer. Projects the latents onto random unit directions and applies the Epps-Pulley normality test; by Cramer-Wold, matching all 1D marginals to N(0,1) matches the joint to N(0, I). Provable anti-collapse.
 # 
 # **Physics consistency** (`lam_phys > 0`, physics mode): pulls the encoded *next* pose (`target_next_z` dims 0,1,2) toward the kinematic step of the *current* latent (`phys_next_z` dims 0,1,2). Minimizing it requires the next-frame encoding's position to equal `z + dt·v·cos(z2)...`, which requires `z2` to be a real heading. This is the soft version of the architectural pose lock, and the weight is the "physics ratio" you can crank.
-
-# In[ ]:
-
-
-def sigreg_loss(
-    z: torch.Tensor,
-    n_projections: int = 1024,
-    n_quad: int = 17,
-    t_max: float = 3.0,
-    eps: float = 1e-6,
-) -> torch.Tensor:
-    """Sketched-Isotropic-Gaussian Regularizer (SIGReg).
-
-    Projects z onto n_projections random unit directions and applies the
-    univariate Epps-Pulley normality test to each projection.
-
-    SIGReg(Z) -> 0 iff P_Z -> N(0, I)  (Cramer-Wold theorem).
-
-    Matches the reference le-wm implementation: quadrature on [0, 3] with 17
-    knots, 1024 projections, statistic scaled by batch size B.
-
-    Parameters
-    ----------
-    z : (B, D)
-    n_projections : int
-        Number of random unit directions. Reference uses 1024.
-    n_quad : int
-        Quadrature nodes. Reference uses 17 on [0, 3].
-    t_max : float
-        Upper integration limit. Reference uses 3.0.
-    eps : float
-        Small constant for direction normalization.
-    """
-    B, D = z.shape
-
-    t  = torch.linspace(0.0, t_max, n_quad, device=z.device, dtype=z.dtype)
-    dt = t_max / (n_quad - 1)
-    w  = torch.full((n_quad,), 2.0 * dt, device=z.device, dtype=z.dtype)
-    w[0] = dt;  w[-1] = dt
-    phi0             = torch.exp(-t ** 2 / 2)
-    combined_weights = w * phi0
-
-    dirs = torch.randn(D, n_projections, device=z.device, dtype=z.dtype)
-    dirs = dirs / (dirs.norm(dim=0, keepdim=True) + eps)
-
-    x_t    = (z @ dirs).unsqueeze(-1) * t
-    ecf_re = x_t.cos().mean(0)
-    ecf_im = x_t.sin().mean(0)
-
-    err    = (ecf_re - phi0) ** 2 + ecf_im ** 2
-    T_stat = (err @ combined_weights) * B
-    return T_stat.mean()
-
-
-def state_to_target(states: torch.Tensor) -> torch.Tensor:
-    """(N,3) (x,y,theta) -> (N,4) (x,y,cos,sin). Shared anchor-target builder."""
-    x, y, th = states[:, 0], states[:, 1], states[:, 2]
-    return torch.stack([x, y, torch.cos(th), torch.sin(th)], dim=1)
 
 
 def jepa_loss(out: dict, lam: float = 1.0, lam_phys: float = 0.0,

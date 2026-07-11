@@ -24,6 +24,19 @@ DATASETS_DIR    = ROOT / "data" / "datasets"
 CHECKPOINTS_DIR = ROOT / "models" / "checkpoints"
 RESULTS_DIR     = ROOT / "results"
 
+
+def experiment_paths(run: str, model: str, tag: str):
+    """Nested experiment layout, organized by run then model:
+        checkpoints/<run>/<model>/<tag>.pt
+        results/<run>/<model>/<tag>/
+    Returns (ckpt_path, report_dir) and creates the parent dirs. One place so every
+    training entry point (and the future unified train.py) organizes identically."""
+    ckpt   = CHECKPOINTS_DIR / run / model / f"{tag}.pt"
+    report = RESULTS_DIR / run / model / tag
+    ckpt.parent.mkdir(parents=True, exist_ok=True)
+    report.mkdir(parents=True, exist_ok=True)
+    return ckpt, report
+
 # --- Dataset --------------------------------------------------------------
 # RUN names the .h5 file only. It is shared across model experiments, so it
 # does NOT name the checkpoint or results (those are per-experiment, below).
