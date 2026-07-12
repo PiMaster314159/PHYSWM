@@ -35,12 +35,13 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from typing import Optional, Union
 
-from models.components import state_to_target, sigreg_loss
 try:
-    from models.jepa import JEPA, jepa_loss, sigreg_loss, state_to_target
+    from models.components import state_to_target, sigreg_loss
+    from models.jepa import JEPA, jepa_loss
     from models.dataset import make_dataloaders
 except ImportError:
-    from jepa import JEPA, jepa_loss, sigreg_loss, state_to_target
+    from components import state_to_target, sigreg_loss
+    from jepa import JEPA, jepa_loss
     from dataset import make_dataloaders
 
 

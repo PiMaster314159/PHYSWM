@@ -78,3 +78,61 @@ def pose_stats(states):
 
 def standardize(t, mean, std):   return (t - mean) / std
 def unstandardize(t, mean, std): return t * std + mean
+
+def conv_trunk(grid_size, in_channels, channels):
+    layers, c = [], in_channels
+    for c_out in channels:
+        layers += [nn.Conv2d(c, c_out, 3, stride=2, padding=1), nn.ReLU(inplace=True)]; c = c_out
+    trunk = nn.Sequential(*layers)
+    with torch.no_grad():
+        flat = trunk(torch.zeros(1, in_channels, grid_size, grid_size)).flatten(1).shape[1]
+    return trunk, flat
+
+def constrain_pose(raw, eps=1e-6):
+    return torch.cat([torch.sigmoid(raw[:, :2]), F.normalize(raw[:, 2:4], dim=1, eps=eps)], dim=1)
+
+
+def unicycle_step(state, action, dt, a_v=1.0, a_omega=1.0, eps=1e-6):
+    """Semi-implicit unicycle step on [x, y, cosθ, sinθ] (matches sim/dynamics.py): rotate
+    the heading by a_omega·ω·dt, then move along the NEW heading at a_v·v. Heading stays on
+    the unit circle (a rotation), so no wrap handling. a_v, a_omega are gray-box scales
+    (default 1 = pure known kinematics). Shared by ego (whole state) and grounded (block)."""
+    x, y = state[:, 0:1], state[:, 1:2]
+    c, s = state[:, 2:3], state[:, 3:4]
+    n    = torch.clamp(torch.sqrt(c * c + s * s), min=eps)   # normalize input heading (no-op when already unit)
+    c, s = c / n, s / n
+    v, omega = action[:, 0:1], action[:, 1:2]
+    cw, sw = torch.cos(a_omega * omega * dt), torch.sin(a_omega * omega * dt)
+    c_new  = c * cw - s * sw
+    s_new  = s * cw + c * sw
+    x_new  = x + a_v * v * c_new * dt
+    y_new  = y + a_v * v * s_new * dt
+    return torch.cat([x_new, y_new, c_new, s_new], dim=1)
+
+
+def mlp(sizes, out_act=None):
+    """Linear/ReLU stack. sizes=[in, h1, ..., out]; ReLU between layers, optional final
+    activation module (e.g. nn.Sigmoid()). Layer indices match the old explicit Sequentials,
+    so existing state_dict keys (net.0, net.2, ...) still load."""
+    layers = []
+    for i in range(len(sizes) - 1):
+        layers.append(nn.Linear(sizes[i], sizes[i + 1]))
+        if i < len(sizes) - 2:
+            layers.append(nn.ReLU(inplace=True))
+    if out_act is not None:
+        layers.append(out_act)
+    return nn.Sequential(*layers)
+
+
+class MLPDecoder(nn.Module):
+    """MLP: a low-dim vector (ego state / grounded block) -> frame in [0,1]. Merges the old
+    Renderer and BlockDecoder (identical structure)."""
+
+    def __init__(self, in_dim, grid_size, hidden=512):
+        super().__init__()
+        self.grid_size = grid_size
+        self.net = mlp([in_dim, hidden, hidden, grid_size * grid_size], out_act=nn.Sigmoid())
+
+    def forward(self, v):
+        g = self.grid_size
+        return self.net(v).view(-1, 1, g, g)

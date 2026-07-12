@@ -29,7 +29,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.components import img_loss
+from models.components import img_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder
 
 from config import GRID_SIZE, ENCODER_CHANNELS, IN_CHANNELS, ACTION_DIM, DT
 
@@ -49,44 +49,17 @@ class StateEncoder(nn.Module):
     def __init__(self, grid_size: int = GRID_SIZE, channels: tuple = ENCODER_CHANNELS,
                  in_channels: int = IN_CHANNELS):
         super().__init__()
-        layers, c_in = [], in_channels
-        for c_out in channels:
-            layers += [nn.Conv2d(c_in, c_out, 3, stride=2, padding=1), nn.ReLU(inplace=True)]
-            c_in = c_out
-        self.conv = nn.Sequential(*layers)
-        with torch.no_grad():
-            flat = self.conv(torch.zeros(1, in_channels, grid_size, grid_size)).flatten(1).shape[1]
+        self.conv, flat = conv_trunk(grid_size, in_channels, channels)
         self.head = nn.Linear(flat, STATE_DIM)
-
-    @staticmethod
-    def constrain(raw: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-        pos  = torch.sigmoid(raw[:, :2])
-        head = F.normalize(raw[:, 2:4], dim=1, eps=eps)
-        return torch.cat([pos, head], dim=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.ndim != 4:
             raise ValueError(f"expected (B, C, H, W), got {tuple(x.shape)}")
-        return self.constrain(self.head(self.conv(x).flatten(1)))
+        return constrain_pose(self.head(self.conv(x).flatten(1)))
 
 
-# ## Renderer (decoder): physical state -> frame
-
-class Renderer(nn.Module):
-    """state -> frame. Learns the simulator's renderer from 4 numbers."""
-
-    def __init__(self, state_dim: int = STATE_DIM, grid_size: int = GRID_SIZE, hidden: int = 512):
-        super().__init__()
-        self.grid_size = grid_size
-        self.net = nn.Sequential(
-            nn.Linear(state_dim, hidden), nn.ReLU(inplace=True),
-            nn.Linear(hidden, hidden),    nn.ReLU(inplace=True),
-            nn.Linear(hidden, grid_size * grid_size), nn.Sigmoid(),
-        )
-
-    def forward(self, s: torch.Tensor) -> torch.Tensor:
-        g = self.grid_size
-        return self.net(s).view(-1, 1, g, g)
+# ## Renderer (decoder): physical state -> frame. Now the shared components.MLPDecoder.
+Renderer = MLPDecoder   # back-compat alias (hidden_ego still imports Renderer)
 
 
 class SpatialBroadcastDecoder(nn.Module):
@@ -118,29 +91,6 @@ class SpatialBroadcastDecoder(nn.Module):
         return torch.sigmoid(self.net(torch.cat([s_map, coords], dim=1)))
 
 
-# ## Gray-box dynamics
-
-def ego_step(state: torch.Tensor, action: torch.Tensor, dt: float,
-             a_v: torch.Tensor, a_omega: torch.Tensor) -> torch.Tensor:
-    """Known unicycle step on [x, y, cos th, sin th] with learnable scales.
-
-    Semi-implicit (rotate heading, then move along the new heading), matching
-    sim/dynamics.py. a_v, a_omega are the gray-box coefficients: on the frictionless
-    toy they should learn ~1; on a real car they absorb wheelbase / velocity scaling.
-    Heading stays on the unit circle (a rotation), so no wrap handling is needed.
-    """
-    x, y = state[:, 0:1], state[:, 1:2]
-    c, s = state[:, 2:3], state[:, 3:4]
-    v, omega = action[:, 0:1], action[:, 1:2]
-    w  = a_omega * omega * dt
-    cw, sw = torch.cos(w), torch.sin(w)
-    c_new = c * cw - s * sw
-    s_new = s * cw + c * sw
-    x_new = x + a_v * v * c_new * dt
-    y_new = y + a_v * v * s_new * dt
-    return torch.cat([x_new, y_new, c_new, s_new], dim=1)
-
-
 class EgoWorldModel(nn.Module):
     """Encoder + renderer + gray-box dynamics.
 
@@ -162,7 +112,7 @@ class EgoWorldModel(nn.Module):
         if decoder == "broadcast":
             self.renderer = SpatialBroadcastDecoder(STATE_DIM, grid_size)
         elif decoder == "mlp":
-            self.renderer = Renderer(STATE_DIM, grid_size, renderer_hidden)
+            self.renderer = MLPDecoder(STATE_DIM, grid_size, renderer_hidden)
         else:
             raise ValueError(f"decoder must be 'broadcast' or 'mlp', got {decoder!r}")
         # gray-box physical coefficients (log-space, =1 at init). FROZEN by default:
@@ -176,10 +126,7 @@ class EgoWorldModel(nn.Module):
             self.register_buffer("log_a_v",     torch.zeros(()))
             self.register_buffer("log_a_omega", torch.zeros(()))
         if residual_budget > 0:
-            self.residual = nn.Sequential(
-                nn.Linear(STATE_DIM + ACTION_DIM, 64), nn.ReLU(inplace=True),
-                nn.Linear(64, STATE_DIM),
-            )
+            self.residual = mlp([STATE_DIM + ACTION_DIM, 64, STATE_DIM])
 
     def encode(self, frame: torch.Tensor) -> torch.Tensor:
         return self.encoder(frame)
@@ -188,7 +135,7 @@ class EgoWorldModel(nn.Module):
         return self.renderer(s)
 
     def step(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        nxt = ego_step(s, action, self.dt, self.log_a_v.exp(), self.log_a_omega.exp())
+        nxt = unicycle_step(s, action, self.dt, self.log_a_v.exp(), self.log_a_omega.exp())
         if self.residual_budget > 0:
             nxt = nxt + self.residual_budget * torch.tanh(self.residual(torch.cat([s, action], dim=-1)))
         return nxt
@@ -300,12 +247,12 @@ def _test_state_ae():
         print(f"decoder={decoder} budget={budget} learn_coeffs={learn}  total={parts['total']:.4f}  "
               f"recon={parts['recon']:.4f}  dyn={parts['dyn']:.4f}  var={parts['var']:.4f}")
 
-    # ego_step sanity vs the simulator's convention
+    # unicycle_step sanity vs the simulator's convention
     s = torch.tensor([[0.5, 0.5, 1.0, 0.0]])               # at center, facing +x
     one = torch.ones(())
-    nb = ego_step(s, torch.tensor([[1.0, 0.0]]), 0.1, one, one)
+    nb = unicycle_step(s, torch.tensor([[1.0, 0.0]]), 0.1, one, one)
     assert torch.allclose(nb, torch.tensor([[0.6, 0.5, 1.0, 0.0]]), atol=1e-5), nb
-    nb = ego_step(s, torch.tensor([[0.0, (torch.pi / 2) / 0.1]]), 0.1, one, one)  # quarter turn
+    nb = unicycle_step(s, torch.tensor([[0.0, (torch.pi / 2) / 0.1]]), 0.1, one, one)  # quarter turn
     assert torch.allclose(nb[:, 2:], torch.tensor([[0.0, 1.0]]), atol=1e-5), nb
     print("All state_ae tests passed.")
 

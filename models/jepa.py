@@ -26,7 +26,7 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").ex
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from models.components import sigreg_loss, state_to_target
+from models.components import sigreg_loss, state_to_target, conv_trunk, mlp
 
 from config import (
     DATA_PATH, DT, PRED_STEP,
@@ -93,18 +93,7 @@ class Encoder(nn.Module):
         self.grid_size  = grid_size
         self.latent_dim = latent_dim
 
-        layers = []
-        c_in = in_channels
-        for c_out in channels:
-            layers.append(nn.Conv2d(c_in, c_out, kernel_size=3, stride=2, padding=1))
-            layers.append(nn.ReLU(inplace=True))
-            c_in = c_out
-        self.conv = nn.Sequential(*layers)
-
-        with torch.no_grad():
-            dummy    = torch.zeros(1, in_channels, grid_size, grid_size)
-            flat_dim = self.conv(dummy).flatten(1).shape[1]
-
+        self.conv, flat_dim = conv_trunk(grid_size, in_channels, channels)
         self.head = nn.Sequential(
             nn.Linear(flat_dim, latent_dim),
             nn.BatchNorm1d(latent_dim),
@@ -188,13 +177,7 @@ class Predictor(nn.Module):
             raise ValueError("physics mode needs latent_dim >= 3 (uses dims 0,1,2)")
         self.mode = mode
         self.dt   = dt
-        self.net  = nn.Sequential(
-            nn.Linear(latent_dim + action_dim, hidden),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden, hidden),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden, latent_dim),
-        )
+        self.net  = mlp([latent_dim + action_dim, hidden, hidden, latent_dim])
         self.lock_pose = (mode == "physics" and lock_pose)
         if mode == "physics":
             # learnable unit-bridging scales, log-space so they stay positive (=1 at init)

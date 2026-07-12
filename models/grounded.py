@@ -37,7 +37,7 @@ from config import (
     IN_CHANNELS, DT, PHYSICS_BLOCK_DIM,
 )
 
-from models.components import sigreg_loss
+from models.components import sigreg_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder
 
 
 # ## Encoder with a split head
@@ -66,75 +66,23 @@ class GroundedEncoder(nn.Module):
         self.block_dim = block_dim
         self.free_dim  = latent_dim - block_dim
 
-        layers = []
-        c_in = in_channels
-        for c_out in channels:
-            layers.append(nn.Conv2d(c_in, c_out, kernel_size=3, stride=2, padding=1))
-            layers.append(nn.ReLU(inplace=True))
-            c_in = c_out
-        self.conv = nn.Sequential(*layers)
-
-        with torch.no_grad():
-            flat_dim = self.conv(torch.zeros(1, in_channels, grid_size, grid_size)).flatten(1).shape[1]
-
+        self.conv, flat_dim = conv_trunk(grid_size, in_channels, channels)
         self.phys_head = nn.Linear(flat_dim, block_dim)            # raw, no BatchNorm
         self.free_head = nn.Sequential(
             nn.Linear(flat_dim, self.free_dim),
             nn.BatchNorm1d(self.free_dim),
         )
 
-    @staticmethod
-    def _constrain_block(raw: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-        """Map the raw block head to valid physical units, by construction.
-
-        Position dims -> sigmoid -> [0,1] (the known arena bounds). Heading dims ->
-        safe unit-normalize -> the unit circle. This pins the block to real-scale
-        state (so the kinematics see the right magnitudes) and stops the block from
-        running away, the role BatchNorm used to play, without re-isotropizing it.
-        """
-        pos  = torch.sigmoid(raw[:, :2])                               # x, y in [0,1]
-        head = raw[:, 2:4]
-        head = head / torch.sqrt((head * head).sum(1, keepdim=True) + eps)   # -> unit circle, no blow-up at 0
-        return torch.cat([pos, head], dim=1)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(B, 1, H, W) -> (B, latent_dim), block dims first."""
         if x.ndim != 4:
             raise ValueError(f"expected (B, C, H, W), got {tuple(x.shape)}")
         feat = self.conv(x).flatten(1)
-        phys = self._constrain_block(self.phys_head(feat))
+        phys = constrain_pose(self.phys_head(feat))   # block -> [0,1] pos + unit-circle heading
         return torch.cat([phys, self.free_head(feat)], dim=1)
 
 
 # ## Predictor: kinematics on the block, residual MLP on the free dims
-
-def unicycle_step(block: torch.Tensor, action: torch.Tensor, dt: float,
-                  a_v=1.0, a_omega=1.0, eps: float = 1e-6) -> torch.Tensor:
-    """Advance a (B, 4) block [x, y, cos th, sin th] by one unicycle step.
-
-    Semi-implicit Euler, matching sim/dynamics.py: rotate heading first, then move
-    along the NEW heading. Heading stays on the unit circle by construction (a
-    rotation), and the prediction loss pushes the encoder's raw heading dims onto
-    it too. No angle wrapping needed since heading is carried as (cos, sin).
-
-    a_v, a_omega are gray-box speed/turn-rate scales (default 1 = pure known kinematics).
-    A learnable a_v lets the block ABSORB an unmodeled actuator loss (commanded v vs applied
-    a_v*v), the same lever the ego model has; locked at 1 it cannot.
-    """
-    x, y   = block[:, 0:1], block[:, 1:2]
-    c, s   = block[:, 2:3], block[:, 3:4]
-    n      = torch.clamp(torch.sqrt(c * c + s * s), min=eps)   # normalize input heading; clamp floors a near-zero norm without distorting unit vectors
-    c, s   = c / n, s / n
-    v      = action[:, 0:1]
-    omega  = action[:, 1:2]
-
-    cw, sw = torch.cos(a_omega * omega * dt), torch.sin(a_omega * omega * dt)
-    c_new  = c * cw - s * sw                          # rotate the heading vector by a_omega*omega*dt
-    s_new  = s * cw + c * sw
-    x_new  = x + a_v * v * c_new * dt                 # move along the new heading (scaled speed)
-    y_new  = y + a_v * v * s_new * dt
-    return torch.cat([x_new, y_new, c_new, s_new], dim=1)
-
 
 class GroundedPredictor(nn.Module):
     """Next latent = [ kinematics(block) (+budget*corr) | free + mlp_free ].
@@ -173,13 +121,7 @@ class GroundedPredictor(nn.Module):
         else:
             self.register_buffer("log_a_v", torch.zeros(()), persistent=False)
         self.register_buffer("log_a_omega", torch.zeros(()), persistent=False)
-        self.net = nn.Sequential(
-            nn.Linear(latent_dim + action_dim, hidden),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden, hidden),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden, latent_dim),
-        )
+        self.net = mlp([latent_dim + action_dim, hidden, hidden, latent_dim])
 
     def forward(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         K          = self.block_dim
@@ -193,26 +135,6 @@ class GroundedPredictor(nn.Module):
 
 
 # ## Optional decoder: frame from the block alone
-
-class BlockDecoder(nn.Module):
-    """Reconstruct the frame from ONLY the physics block (grounding booster)."""
-
-    def __init__(self, block_dim: int = PHYSICS_BLOCK_DIM, grid_size: int = GRID_SIZE, hidden: int = 512):
-        super().__init__()
-        self.grid_size = grid_size
-        self.net = nn.Sequential(
-            nn.Linear(block_dim, hidden),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden, hidden),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden, grid_size * grid_size),
-            nn.Sigmoid(),                              # frames live in [0, 1]
-        )
-
-    def forward(self, block: torch.Tensor) -> torch.Tensor:
-        g = self.grid_size
-        return self.net(block).view(-1, 1, g, g)
-
 
 # ## GroundedJEPA
 
@@ -240,7 +162,7 @@ class GroundedJEPA(nn.Module):
             latent_dim, block_dim, ACTION_DIM, predictor_hidden, dt, lock_block, block_budget,
             learn_coeffs=learn_coeffs,
         )
-        self.decoder = BlockDecoder(block_dim, grid_size) if use_decoder else None
+        self.decoder = MLPDecoder(block_dim, grid_size) if use_decoder else None
 
     def encode(self, frame: torch.Tensor) -> torch.Tensor:
         return self.encoder(frame)
