@@ -13,7 +13,7 @@ class WorldModel(nn.Module):
     def predict(self, z, action):       raise NotImplementedError
     def decode_pose(self, z):           raise NotImplementedError
     def representation_loss(self, out, batch, weights):  raise NotImplementedError
-    def extra_forward(self, frame, next_frame, out):  return {}
+    def extra_forward(self, frame, action, next_frame, out):  return {}
 
     # --- shared machinery ---
     def forward(self, frame, action, next_frame) -> dict:
@@ -21,7 +21,7 @@ class WorldModel(nn.Module):
         pred_next_z   = self.predict(z, action)
         target_next_z = self.encode(next_frame)
         out = {"z": z, "pred_next_z": pred_next_z, "target_next_z": target_next_z}
-        out.update(self.extra_forward(frame, next_frame, out))   # recon / phys_next_z / ...
+        out.update(self.extra_forward(frame, action, next_frame, out))   # recon / phys_next_z / ...
         return out
     
     def pose_supervision(self, out, s_target, s_next_target, w, w_pred):

@@ -167,7 +167,7 @@ def val_total(model, dl, device, a, max_batches=50):
         out = model(frame, b["action"].to(device), nxt)
         s_tgt = state_to_target(b["state"]).to(device) if "state" in b else None
         s_next_tgt = state_to_target(b["next_state"]).to(device) if "next_state" in b else None
-        _, parts = ego_loss(out, frame, nxt, a.lam_dyn, a.lam_pred, a.lam_var, a.var_gamma,
+        _, parts = ego_loss(model, out, frame, nxt, a.lam_dyn, a.lam_pred, a.lam_var, a.var_gamma,
                             a.recon_fg_weight, lam_recon=a.lam_recon, s_target=s_tgt,
                             s_next_target=s_next_tgt, lam_anchor=a.lam_anchor,
                             lam_anchor_pred=a.lam_anchor_pred)
@@ -270,7 +270,7 @@ def main():
                 out = model(frame, b["action"].to(a.device), nxt)
                 s_tgt = state_to_target(b["state"]).to(a.device) if need_state else None
                 s_next_tgt = state_to_target(b["next_state"]).to(a.device) if need_state else None
-                loss, parts = ego_loss(out, frame, nxt, a.lam_dyn, a.lam_pred,
+                loss, parts = ego_loss(model, out, frame, nxt, a.lam_dyn, a.lam_pred,
                                        a.lam_var, a.var_gamma, a.recon_fg_weight,
                                        lam_recon=a.lam_recon, s_target=s_tgt, s_next_target=s_next_tgt,
                                        lam_anchor=a.lam_anchor, lam_anchor_pred=a.lam_anchor_pred)
@@ -278,7 +278,7 @@ def main():
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
                 opt.step(); step += 1
                 if step % 50 == 0:
-                    per_dim = out["s"].std(0).tolist()                 # [std d0, d1, d2, d3]
+                    per_dim = out["z"].std(0).tolist()                 # [std d0, d1, d2, d3]
                     st_std = sum(per_dim) / len(per_dim)
                     row = {"step": step, "epoch": epoch + 1, **parts,
                            "a_v": model.log_a_v.exp().item(), "a_omega": model.log_a_omega.exp().item(),

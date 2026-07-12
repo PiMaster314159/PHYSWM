@@ -146,56 +146,39 @@ class EgoWorldModel(WorldModel):
         """(B, 4) state IS real-unit pose [x,y,cosθ,sinθ]."""
         return z[:, :4]
 
-    def forward(self, frame: torch.Tensor, action: torch.Tensor, next_frame: torch.Tensor) -> dict:
-        s      = self.encode(frame)
-        s_next = self.encode(next_frame)
-        s_pred = self.step(s, action)
-        return {
-            "s": s, "s_next": s_next, "s_pred": s_pred,
-            "recon": self.render(s),
-            "pred_recon": self.render(s_pred),
-        }
+    def extra_forward(self, frame, action, next_frame, out):
+        """Render the encoded and predicted states to frames (the reconstruction grounding)."""
+        return {"recon": self.render(out["z"]), "pred_recon": self.render(out["pred_next_z"])}
+
+    def representation_loss(self, out, batch, weights):
+        """Ego's own terms: recon + dyn + pred_recon + variance floor. anchor/anchor_pred are
+        the shared WorldModel.pose_supervision (ego's pose buffers stay 0/1, so it's raw MSE)."""
+        fg    = weights.get("fg_weight", 0.0)
+        recon = img_loss(out["recon"],      batch["frame"],      fg)
+        dyn   = F.mse_loss(out["pred_next_z"], out["target_next_z"].detach())
+        pred  = img_loss(out["pred_recon"], batch["next_frame"], fg)
+        std   = (out["z"].var(0) + 1e-4).sqrt()                        # per-dim batch std (grad-safe)
+        var   = F.relu(weights.get("var_gamma", 0.1) - std).mean()     # > 0 only below the floor
+        total = (weights.get("recon", 1.0) * recon + weights.get("dyn", 1.0) * dyn
+                 + weights.get("pred", 1.0) * pred + weights.get("var", 0.0) * var)
+        parts = {"recon": recon.item(), "dyn": dyn.item(), "pred_recon": pred.item(), "var": var.item()}
+        return total, parts
 
 
-def ego_loss(out: dict, frame: torch.Tensor, next_frame: torch.Tensor,
+def ego_loss(model, out: dict, frame: torch.Tensor, next_frame: torch.Tensor,
              lam_dyn: float = 1.0, lam_pred: float = 1.0,
              lam_var: float = 0.0, var_gamma: float = 0.1,
              recon_fg_weight: float = 0.0, lam_recon: float = 1.0,
              s_target: torch.Tensor = None, s_next_target: torch.Tensor = None,
              lam_anchor: float = 0.0, lam_anchor_pred: float = 0.0) -> tuple:
-    """recon (grounds state) + dyn (physics in state space) + pred_recon (predicted->pixels)
-    + an optional variance floor that forbids any state dim from going dead
-    + an optional supervised state anchor (privileged info: label-free at inference).
-
-    The variance floor is the VICReg variance term: penalize a dim whose batch std drops
-    below var_gamma. It is pure anti-collapse, it does NOT decorrelate the dims, so it
-    keeps them interpretable, but it stops the encoder from zeroing out d0,d1 or caving
-    the whole state to a constant under the collapse-prone dyn loss.
-
-    ANCHOR (lam_anchor > 0): pull the encoded state toward a true-pose target s_target
-    (=[x, y, cos th, sin th]) supplied only during training. This directly pins the 4
-    dims to metric pose, so heading no longer relies on the weak dynamics signal, and the
-    latent IS the state (no gauge freedom). s_next_target + lam_anchor_pred additionally
-    supervises the PREDICTED next state, forcing the predictor to be real dynamics. At
-    inference the encoder is camera-only; the anchor is a training-time crutch.
-    lam_recon scales the frame reconstruction so it can be dropped (lam_recon=0) once the
-    anchor, not the decoder, is the thing grounding the state.
-    """
-    recon = img_loss(out["recon"], frame, recon_fg_weight)
-    dyn   = F.mse_loss(out["s_pred"], out["s_next"].detach())
-    pred  = img_loss(out["pred_recon"], next_frame, recon_fg_weight)
-    std   = (out["s"].var(0) + 1e-4).sqrt()                 # per-dim std over the batch (grad-safe)
-    var   = F.relu(var_gamma - std).mean()                  # > 0 only for dims below the floor
-    anchor      = F.mse_loss(out["s"], s_target) if (lam_anchor > 0 and s_target is not None) \
-                  else torch.zeros((), device=out["s"].device)
-    anchor_pred = F.mse_loss(out["s_pred"], s_next_target) if (lam_anchor_pred > 0 and s_next_target is not None) \
-                  else torch.zeros((), device=out["s"].device)
-    total = (lam_recon * recon + lam_dyn * dyn + lam_pred * pred + lam_var * var
-             + lam_anchor * anchor + lam_anchor_pred * anchor_pred)
-    parts = {"recon": recon.item(), "dyn": dyn.item(), "pred_recon": pred.item(),
-             "var": var.item(), "anchor": anchor.item(), "anchor_pred": anchor_pred.item(),
-             "total": total.item()}
-    return total, parts
+    """Thin adapter: pack args into (batch, weights) and call model.loss. Terms live in
+    EgoWorldModel.representation_loss (recon+dyn+pred_recon+var) + WorldModel.pose_supervision
+    (anchor/anchor_pred; ego's pose buffers stay 0/1 so it's raw MSE, matching the old loss)."""
+    batch   = {"frame": frame, "next_frame": next_frame, "s_target": s_target, "s_next_target": s_next_target}
+    weights = {"dyn": lam_dyn, "pred": lam_pred, "var": lam_var, "var_gamma": var_gamma,
+               "fg_weight": recon_fg_weight, "recon": lam_recon,
+               "anchor": lam_anchor, "anchor_pred": lam_anchor_pred}
+    return model.loss(out, batch, weights)
 
 
 def ego_rollout_loss(model, frame: torch.Tensor, actions: torch.Tensor, poses: torch.Tensor,
@@ -239,12 +222,12 @@ def _test_state_ae():
         m = EgoWorldModel(grid_size=g, residual_budget=budget, learn_coeffs=learn, decoder=decoder)
         frame, action, nxt = torch.rand(B, 1, g, g), torch.rand(B, 2), torch.rand(B, 1, g, g)
         out = m(frame, action, nxt)
-        assert out["s"].shape == (B, STATE_DIM)
+        assert out["z"].shape == (B, STATE_DIM)
         assert out["recon"].shape == (B, 1, g, g)
         # state is constrained: position in [0,1], heading unit norm
-        assert (out["s"][:, :2] >= 0).all() and (out["s"][:, :2] <= 1).all()
-        assert torch.allclose(out["s"][:, 2:].norm(dim=1), torch.ones(B), atol=1e-4)
-        total, parts = ego_loss(out, frame, nxt, lam_var=1.0)
+        assert (out["z"][:, :2] >= 0).all() and (out["z"][:, :2] <= 1).all()
+        assert torch.allclose(out["z"][:, 2:].norm(dim=1), torch.ones(B), atol=1e-4)
+        total, parts = ego_loss(m, out, frame, nxt, lam_var=1.0)
         m.zero_grad(); total.backward()
         assert m.encoder.head.weight.grad.abs().sum() > 0
         assert m.renderer.net[0].weight.grad.abs().sum() > 0      # decoder gets gradient

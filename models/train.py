@@ -164,6 +164,8 @@ def train_jepa(
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device).train()
+    if anchor_mean is not None:      # bake pose stats into the buffers so pose_supervision
+        model.set_pose_stats(anchor_mean.to(device), anchor_std.to(device))   # standardizes the readout
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     history  = {"train": [], "val": []}
@@ -180,18 +182,12 @@ def train_jepa(
                 batch["action"].to(device),
                 batch["next_frame"].to(device),
             )
-            s_target = s_next_target = None
+            s_target = s_next_target = None      # RAW pose; model.pose_supervision standardizes via buffers
             if (lam_anchor > 0 or lam_readout > 0 or lam_readout_pred > 0) and "state" in batch:
-                t = state_to_target(batch["state"]).to(device)
-                if anchor_mean is not None:                  # standardize to match BN/SIGReg scale
-                    t = (t - anchor_mean.to(device)) / anchor_std.to(device)
-                s_target = t
-                if lam_readout_pred > 0 and "next_state" in batch:   # same standardization, next pose
-                    tn = state_to_target(batch["next_state"]).to(device)
-                    if anchor_mean is not None:
-                        tn = (tn - anchor_mean.to(device)) / anchor_std.to(device)
-                    s_next_target = tn
-            loss, parts = jepa_loss(out, lam=lam, lam_phys=lam_phys, s_target=s_target,
+                s_target = state_to_target(batch["state"]).to(device)
+                if lam_readout_pred > 0 and "next_state" in batch:
+                    s_next_target = state_to_target(batch["next_state"]).to(device)
+            loss, parts = jepa_loss(model, out, lam=lam, lam_phys=lam_phys, s_target=s_target,
                                     lam_anchor=lam_anchor, lam_readout=lam_readout,
                                     s_next_target=s_next_target, lam_readout_pred=lam_readout_pred)
 

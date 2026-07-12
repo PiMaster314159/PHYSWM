@@ -128,7 +128,7 @@ def main():
             out   = model(frame, b["action"].to(a.device), b["next_frame"].to(a.device))
             s_tgt      = state_to_target(b["state"]).to(a.device) if need_state else None
             s_next_tgt = state_to_target(b["next_state"]).to(a.device) if need_state else None
-            loss, parts = grounded_loss(out, frame, block_dim=a.block_dim, lam=a.lam,
+            loss, parts = grounded_loss(model, out, frame, block_dim=a.block_dim, lam=a.lam,
                                         lam_recon=a.lam_recon, recon_fg_weight=a.recon_fg_weight,
                                         pred_block_weight=a.pred_block_weight,
                                         s_target=s_tgt, lam_anchor=a.lam_anchor,

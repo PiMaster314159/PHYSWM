@@ -38,7 +38,7 @@ from config import (
 )
 
 from models.base import WorldModel
-from models.components import sigreg_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder
+from models.components import sigreg_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder, img_loss
 
 
 # ## Encoder with a split head
@@ -175,84 +175,46 @@ class GroundedJEPA(WorldModel):
         """(B, latent) -> (B, 4) real-unit pose: the block IS pose [x,y,cosθ,sinθ]."""
         return z[:, :self.block_dim]
 
-    def forward(self, frame: torch.Tensor, action: torch.Tensor, next_frame: torch.Tensor) -> dict:
-        z             = self.encode(frame)
-        pred_next_z   = self.predict(z, action)
-        target_next_z = self.encode(next_frame)
-        out = {"z": z, "pred_next_z": pred_next_z, "target_next_z": target_next_z}
+    def extra_forward(self, frame, action, next_frame, out):
+        """Optional block decode (grounding booster) when use_decoder=True."""
         if self.decoder is not None:
-            out["recon"] = self.decoder(z[:, :self.block_dim])
-        return out
+            return {"recon": self.decoder(out["z"][:, :self.block_dim])}
+        return {}
+
+    def representation_loss(self, out, batch, weights):
+        """Grounded's own terms: block-weighted prediction MSE + SIGReg (free dims only) +
+        optional block recon. anchor/anchor_pred are the shared WorldModel.pose_supervision
+        (block IS pose, buffers 0/1 -> raw MSE on dims 0..block_dim)."""
+        K    = self.block_dim
+        err2 = (out["pred_next_z"] - out["target_next_z"].detach()) ** 2
+        free_pred  = err2[:, K:].mean()
+        block_pred = err2[:, :K].mean()
+        pred = free_pred + weights.get("pred_block_weight", 1.0) * block_pred
+        sig  = sigreg_loss(out["z"][:, K:])                     # SIGReg on the FREE dims only
+        total = pred + weights.get("sigreg", 0.005) * sig
+        parts = {"pred": pred.item(), "pred_block": block_pred.item(),
+                 "pred_free": free_pred.item(), "sigreg": sig.item()}
+        if "recon" in out and weights.get("recon", 0.0) > 0:
+            recon = img_loss(out["recon"], batch["frame"], weights.get("fg_weight", 0.0))
+            total = total + weights["recon"] * recon
+            parts["recon"] = recon.item()
+        return total, parts
 
 
-def grounded_loss(out: dict, frame: torch.Tensor, block_dim: int = PHYSICS_BLOCK_DIM,
+def grounded_loss(model, out: dict, frame: torch.Tensor, block_dim: int = PHYSICS_BLOCK_DIM,
                   lam: float = 0.005, lam_recon: float = 0.0, recon_fg_weight: float = 0.0,
                   pred_block_weight: float = 1.0,
                   s_target: torch.Tensor = None, lam_anchor: float = 0.0,
                   s_next_target: torch.Tensor = None, lam_anchor_pred: float = 0.0) -> tuple:
-    """Prediction MSE + SIGReg (FREE dims only) + optional recon + optional block anchor.
-
-    ANCHOR (lam_anchor > 0): pull the block (dims 0..block_dim-1) toward true pose
-    s_target = [x, y, cos th, sin th]. Because the block is EXEMPT from SIGReg and is
-    sigmoid/normalize-constrained to real scale, the target is RAW pose (not standardized
-    like the BatchNorm'd JEPA), and the anchor does NOT fight any isotropy pressure. This
-    is the clean test of whether SIGReg-free dims, given direct state supervision, encode
-    pose properly.
-
-    The block part of the prediction loss IS the label-free physics-consistency
-    constraint (the block forward is locked kinematics): satisfying it requires the
-    encoder to put true pose in the block. But the block is only 4 of 128 dims, so
-    a plain all-dims MSE dilutes it to ~3% and the encoder ignores it. pred is
-    therefore split: free-dim mean + pred_block_weight * block-dim mean. Raise
-    pred_block_weight to give the kinematics teeth (this is the heading lever; the
-    decoder grounds position but not heading). SIGReg is applied only to the free
-    dims so the block can hold real-scale state.
-
-    recon_fg_weight > 0 makes recon foreground-weighted (bg_mean + w*fg_mean) so the
-    decoder must draw a sharp oriented shape rather than a blurry blob.
-    """
-    err2       = (out["pred_next_z"] - out["target_next_z"].detach()) ** 2
-    free_pred  = err2[:, block_dim:].mean()
-    block_pred = err2[:, :block_dim].mean()
-    pred       = free_pred + pred_block_weight * block_pred
-    sig        = sigreg_loss(out["z"][:, block_dim:])
-    total      = pred + lam * sig
-    parts = {"pred": pred.item(), "pred_block": block_pred.item(),
-             "pred_free": free_pred.item(), "sigreg": sig.item()}
-
-    if lam_recon > 0 and "recon" in out:
-        if recon_fg_weight > 0:
-            # Average the error over foreground and background pixels SEPARATELY, so
-            # the shape (~0.7% of pixels) is not drowned by the easy black background
-            # (~99%). recon = bg_mean + recon_fg_weight * fg_mean. fg = lit pixels
-            # (triangle body + nose); getting their layout right needs the orientation.
-            err2 = (out["recon"] - frame) ** 2
-            fg   = (frame > 0).float()
-            fg_mean = (err2 * fg).sum() / fg.sum().clamp(min=1.0)
-            bg_mean = (err2 * (1.0 - fg)).sum() / (1.0 - fg).sum().clamp(min=1.0)
-            recon   = bg_mean + recon_fg_weight * fg_mean
-        else:
-            recon = F.mse_loss(out["recon"], frame)
-        total = total + lam_recon * recon
-        parts["recon"] = recon.item()
-
-    if lam_anchor > 0 and s_target is not None:
-        anchor = F.mse_loss(out["z"][:, :block_dim], s_target)
-        total = total + lam_anchor * anchor
-        parts["anchor"] = anchor.item()
-
-    # anchor_pred: pull the PREDICTED next block (kinematic step of the encoded block) toward the
-    # true next pose. Mirrors the ego model. This is a DIRECT, dynamics-based heading signal that
-    # works at any pred_step - unlike the plain prediction loss on the block, whose heading signal
-    # is proportional to per-step displacement and so goes to zero at pred_step=1. It also pins a_v
-    # (the predicted position must land on the true next position), fixing the a_v collapse.
-    if lam_anchor_pred > 0 and s_next_target is not None:
-        anchor_pred = F.mse_loss(out["pred_next_z"][:, :block_dim], s_next_target)
-        total = total + lam_anchor_pred * anchor_pred
-        parts["anchor_pred"] = anchor_pred.item()
-
-    parts["total"] = total.item()
-    return total, parts
+    """Thin adapter: pack args into (batch, weights) and call model.loss. Terms live in
+    GroundedJEPA.representation_loss (block-weighted pred + free-dim SIGReg + recon) +
+    WorldModel.pose_supervision (block anchor/anchor_pred; buffers 0/1 -> raw MSE). block_dim
+    comes from the model now, so the arg is ignored (kept for call-site compatibility)."""
+    batch   = {"frame": frame, "s_target": s_target, "s_next_target": s_next_target}
+    weights = {"sigreg": lam, "recon": lam_recon, "fg_weight": recon_fg_weight,
+               "pred_block_weight": pred_block_weight,
+               "anchor": lam_anchor, "anchor_pred": lam_anchor_pred}
+    return model.loss(out, batch, weights)
 
 
 # ## Smoke test
@@ -278,7 +240,7 @@ def _test_grounded():
         if dec:
             assert out["recon"].shape == (B, 1, g, g)
 
-        total, parts = grounded_loss(out, frame, block_dim=K, lam=0.005, lam_recon=(0.1 if dec else 0.0))
+        total, parts = grounded_loss(m, out, frame, block_dim=K, lam=0.005, lam_recon=(0.1 if dec else 0.0))
         assert torch.isfinite(total)
         m.zero_grad()
         total.backward()

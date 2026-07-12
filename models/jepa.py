@@ -288,33 +288,25 @@ class JEPA(WorldModel):
         STANDARDIZED pose; the stored stats bring it back to world units."""
         return unstandardize(self.state_head(z), self.pose_mean, self.pose_std)
 
-    def forward(
-        self,
-        frame: torch.Tensor,
-        action: torch.Tensor,
-        next_frame: torch.Tensor,
-    ) -> dict:
-        """Full predict-vs-target pass.
-
-        Returns
-        -------
-        dict with keys
-            z : (B, D)  encoding of frame_t
-            pred_next_z : (B, D)  predictor forecast of z_{t+1}
-            target_next_z : (B, D)  encoder output for next frame
-            phys_next_z : (B, D)  physics-mode only: kinematic step of z (for the
-                                  physics-consistency loss)
-        """
-        z             = self.encode(frame)
-        pred_next_z   = self.predict(z, action)
-        target_next_z = self.encode(next_frame)
-        out = {"z": z, "pred_next_z": pred_next_z, "target_next_z": target_next_z}
+    def extra_forward(self, frame, action, next_frame, out):
+        """Physics mode only: the kinematic step of z (for the physics-consistency term).
+        Pose readout is handled by decode_pose, so no state_hat here anymore."""
         if self.predictor.mode == "physics":
-            out["phys_next_z"] = self.predictor._physics_base(z, action)
-        if self.state_head is not None:
-            out["state_hat"]      = self.state_head(z)            # probe on the encoded frame
-            out["state_hat_pred"] = self.state_head(pred_next_z)  # probe on the PREDICTED next latent
-        return out
+            return {"phys_next_z": self.predictor._physics_base(out["z"], action)}
+        return {}
+
+    def representation_loss(self, out, batch, weights):
+        """JEPA's own terms: prediction MSE + SIGReg (+ physics consistency). The pose
+        readout/readout_pred are the shared WorldModel.pose_supervision (via decode_pose)."""
+        pred  = F.mse_loss(out["pred_next_z"], out["target_next_z"].detach())
+        sig   = sigreg_loss(out["z"])
+        total = pred + weights.get("sigreg", 1.0) * sig
+        parts = {"pred": pred.item(), "sigreg": sig.item()}
+        if "phys_next_z" in out:
+            phys = F.mse_loss(out["phys_next_z"][:, :3], out["target_next_z"][:, :3].detach())
+            total = total + weights.get("phys", 0.0) * phys
+            parts["phys"] = phys.item()
+        return total, parts
 
 
 # ## Loss
@@ -328,67 +320,19 @@ class JEPA(WorldModel):
 # **Physics consistency** (`lam_phys > 0`, physics mode): pulls the encoded *next* pose (`target_next_z` dims 0,1,2) toward the kinematic step of the *current* latent (`phys_next_z` dims 0,1,2). Minimizing it requires the next-frame encoding's position to equal `z + dt·v·cos(z2)...`, which requires `z2` to be a real heading. This is the soft version of the architectural pose lock, and the weight is the "physics ratio" you can crank.
 
 
-def jepa_loss(out: dict, lam: float = 1.0, lam_phys: float = 0.0,
+def jepa_loss(model, out: dict, lam: float = 1.0, lam_phys: float = 0.0,
               s_target: torch.Tensor = None, lam_anchor: float = 0.0,
               lam_readout: float = 0.0, s_next_target: torch.Tensor = None,
               lam_readout_pred: float = 0.0) -> tuple:
-    """LeWM training loss: prediction MSE + SIGReg (+ optional physics consistency
-    + optional privileged state anchor).
-
-    Parameters
-    ----------
-    out : dict
-        Output of JEPA.forward(). Keys: z, pred_next_z, target_next_z, and (in
-        physics mode) phys_next_z.
-    lam : float
-        Weight on SIGReg.
-    lam_phys : float
-        Weight on the physics-consistency term. Only active when > 0 and the
-        model is in physics mode (out has phys_next_z). Pulls the encoded next
-        pose (dims 0,1,2) toward the kinematic step of the current latent.
-    s_target : torch.Tensor, optional
-        Standardized pose target (B, K) for the first K latent dims. STANDARDIZED
-        (zero-mean/unit-std) because the BatchNorm'd, SIGReg'd latent is mean-0/std-1;
-        a raw-pose target would fight both. Supplied only during training.
-    lam_anchor : float
-        Weight on the state anchor. The label-free analogue of the ego model's anchor:
-        it tests whether SIGReg's isotropy will tolerate or fight a pinned pose subspace.
-
-    Returns
-    -------
-    total : scalar loss with grad
-    parts : dict of float parts for logging (pred, sigreg, phys, anchor, total)
-    """
-    pred  = F.mse_loss(out["pred_next_z"], out["target_next_z"].detach())
-    sig   = sigreg_loss(out["z"])
-    total = pred + lam * sig
-    parts = {"pred": pred.item(), "sigreg": sig.item()}
-
-    if lam_phys > 0 and "phys_next_z" in out:
-        phys = F.mse_loss(out["phys_next_z"][:, :3], out["target_next_z"][:, :3].detach())
-        total = total + lam_phys * phys
-        parts["phys"] = phys.item()
-
-    if lam_anchor > 0 and s_target is not None:
-        K = s_target.shape[1]
-        anchor = F.mse_loss(out["z"][:, :K], s_target)
-        total = total + lam_anchor * anchor
-        parts["anchor"] = anchor.item()
-
-    if lam_readout > 0 and "state_hat" in out and s_target is not None:
-        readout = F.mse_loss(out["state_hat"], s_target)
-        total = total + lam_readout * readout
-        parts["readout"] = readout.item()
-
-    # readout on the PREDICTED next latent -> true next pose: trains exactly the map the
-    # MPC decodes (probe o predictor), the label-free JEPA analogue of ego/grounded anchor_pred.
-    if lam_readout_pred > 0 and "state_hat_pred" in out and s_next_target is not None:
-        readout_pred = F.mse_loss(out["state_hat_pred"], s_next_target)
-        total = total + lam_readout_pred * readout_pred
-        parts["readout_pred"] = readout_pred.item()
-
-    parts["total"] = total.item()
-    return total, parts
+    """Thin adapter: pack the args into (batch, weights) and call model.loss. The actual
+    terms live in JEPA.representation_loss + WorldModel.pose_supervision. s_target/s_next_target
+    are RAW pose [x,y,cosθ,sinθ]; pose_supervision standardizes them with the model's buffers,
+    so JEPA's readout equals the old (state_head vs standardized-pose) loss exactly. Pass RAW
+    targets and set the model's pose stats (model.set_pose_stats) before training.
+    (lam_anchor, the direct dims-0..K pinning, is dropped: superseded by the readout path.)"""
+    batch   = {"s_target": s_target, "s_next_target": s_next_target}
+    weights = {"sigreg": lam, "phys": lam_phys, "anchor": lam_readout, "anchor_pred": lam_readout_pred}
+    return model.loss(out, batch, weights)
 
 
 def count_parameters(module: nn.Module) -> int:
@@ -435,7 +379,7 @@ def _test_jepa():
         oo = mm(frame, action, next_frame)
         assert oo["pred_next_z"].shape == (B, D), (mode, oo["pred_next_z"].shape)
         if mode == "physics":
-            ll, _ = jepa_loss(oo)
+            ll, _ = jepa_loss(mm, oo)
             mm.zero_grad()
             ll.backward()
             assert mm.predictor.log_a_pos.grad   is not None, "a_pos got no gradient"
@@ -449,7 +393,7 @@ def _test_jepa():
     # locked: predicted pose dims equal the pure kinematic base (MLP masked off 0,1,2)
     assert torch.allclose(o["pred_next_z"][:, :3], o["phys_next_z"][:, :3], atol=1e-5), \
         "lock_pose leaked MLP into the pose dims"
-    lp, parts = jepa_loss(o, lam_phys=1.0)
+    lp, parts = jepa_loss(locked, o, lam_phys=1.0)
     assert "phys" in parts and torch.isfinite(lp), "physics-consistency term failed"
     print(f"physics lock_pose + lam_phys OK  (phys={parts['phys']:.4f})")
 
@@ -480,7 +424,7 @@ def _test_jepa():
 
     # gradient wiring: loss must reach every parameter
     out = model(frame, action, next_frame)
-    loss, parts = jepa_loss(out)
+    loss, parts = jepa_loss(model, out)
     assert torch.isfinite(loss), "loss is non-finite"
     model.zero_grad()
     loss.backward()
@@ -500,7 +444,7 @@ def _test_jepa():
         model = JEPA(grid_size=g, latent_dim=D)
         out   = model(batch["frame"], batch["action"], batch["next_frame"])
         assert out["pred_next_z"].shape == (16, D)
-        loss, parts = jepa_loss(out)
+        loss, parts = jepa_loss(model, out)
         assert torch.isfinite(loss)
         print(f"real batch {tuple(batch['frame'].shape)} -> "
               f"pred_next_z {tuple(out['pred_next_z'].shape)}  "
