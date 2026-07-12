@@ -1,22 +1,13 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # # JEPA model
 # 
 # Encoder + Predictor for LeWM training.
 # 
 # Pipeline: `(frame_t, action_t, frame_{t+1})` -> encoder -> predictor -> latent prediction. The encoder maps pixels to latents. The predictor maps `(z_t, action_t)` to a predicted `z_{t+1}`. Training minimizes the distance between that prediction and the actual encoded next frame.
 # 
-# > To generate `models/jepa.py` for importing, run from `PHYSWM/`:
-# > ```
-# > jupyter nbconvert --to python models/jepa.ipynb
-# > ```
 
 # ## Path setup
 # 
 # Same root-finding pattern as `dataset.py`.
-
-# In[ ]:
 
 
 import sys
@@ -38,8 +29,6 @@ from config import (
 
 # ## Imports
 
-# In[ ]:
-
 
 import torch
 import torch.nn as nn
@@ -51,8 +40,6 @@ import torch.nn.functional as F
 # CNN: `(B, 1, H, W)` -> `(B, latent_dim)`.
 # 
 # Three stride-2 conv layers halve spatial dims and grow channel count at each stage. Flattened size is measured once at init via a dummy forward pass so the same class works at any grid size without changes.
-
-# In[ ]:
 
 
 class Encoder(nn.Module):
@@ -125,8 +112,6 @@ class Encoder(nn.Module):
 # - `physics`: base = z + a learnable-scaled unicycle kinematic step on the first 3 latent dims (read as x, y, theta).
 # 
 # The physics base uses only the latent's own dims 0, 1, 2 and the action; no ground-truth pose leaks in. Two learnable scalars (`a_pos`, `a_theta`) bridge latent units and physical units: BatchNorm forces every latent dim to ~unit variance, but the kinematics want position in world units and heading in radians, so `a_pos` amplifies the tiny physical step (`dt·v ≈ 0.018`) to a latent-scale change and `a_theta` reads `z2` as a true angle. This pegs dims 0-2 to pose: to make the base accurate the encoder must put a faithful heading in `z2`. The learned MLP corrects the base and handles the other dims. Set the mode in `config.py` (`PREDICTOR_MODE`).
-
-# In[ ]:
 
 
 class Predictor(nn.Module):
@@ -220,8 +205,6 @@ class Predictor(nn.Module):
 # Wires encoder and predictor together. Forward returns everything the loss needs: current latent, predicted next latent, and actual encoded next latent.
 # 
 # Stop-gradient on the target is applied in `jepa_loss`, not here, keeping this a pure forward pass.
-
-# In[ ]:
 
 
 class JEPA(WorldModel):
@@ -344,8 +327,6 @@ def count_parameters(module: nn.Module) -> int:
 # 
 # Shape checks on random and real batches, resolution-agnosticism, action-sensitivity, gradient wiring, and loss finiteness.
 
-# In[ ]:
-
 
 def _test_jepa():
     torch.manual_seed(0)
@@ -453,9 +434,6 @@ def _test_jepa():
         print(f"(skipping real-batch test: {DATA_PATH} not found)")
 
     print("All JEPA tests passed.")
-
-
-# In[ ]:
 
 
 if __name__ == "__main__":

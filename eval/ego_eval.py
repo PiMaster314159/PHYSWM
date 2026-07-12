@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import config as C
-from models.components import state_to_target
+from models.components import state_to_target, pearson_per_dim
 from models.dataset import make_dataloaders
 
 
@@ -22,12 +22,6 @@ def extract_states(model, dl, device):
         enc.append(model.encode(b["frame"].to(device)).cpu())
         true.append(b["state"])
     return torch.cat(enc), torch.cat(true)
-
-
-def pearson_per_dim(Z, t):
-    Zc = Z - Z.mean(0, keepdim=True)
-    tc = t - t.mean()
-    return (Zc * tc.unsqueeze(1)).mean(0) / (Z.std(0) * t.std() + 1e-8)
 
 
 def probe_pose(Z_tr, T_tr, Z_va, S_va, hidden, device, epochs=120, bs=4096):

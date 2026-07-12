@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # # Data collection
 # 
 # Run random-action episodes through the dynamics simulator and stream them to an HDF5 file. Models never see the continuous state `(x, y, theta)`; we keep it as the answer key for probing.
@@ -15,8 +12,6 @@
 # 
 # `collect.ipynb` lives in `data/`, one level below the project root. Add the root to `sys.path` so `config` and `sim/` import cleanly, wherever the kernel's working directory happens to be.
 
-# In[ ]:
-
 
 import sys
 from pathlib import Path
@@ -29,8 +24,6 @@ from config import DATA_PATH
 
 
 # ## Imports
-
-# In[ ]:
 
 
 import numpy as np
@@ -51,8 +44,6 @@ from sim.visualize import show_frame_strip, show_trajectory
 # ## Action sampling
 # 
 # `v ~ N(v_mean, v_std)` clipped to `[0, 1]` (forward only). `omega ~ N(omega_mean, omega_std)` clipped to `[-pi/2, pi/2]` for reasonable single-step turns. Defaults come from `config.py`; override per call if needed.
-
-# In[17]:
 
 
 def random_normal_clipped(
@@ -75,9 +66,6 @@ def random_normal_clipped(
         The clipped sample.
     """
     return float(np.clip(rng.normal(mean, std), low, high))
-
-
-# In[18]:
 
 
 def sample_action(
@@ -113,8 +101,6 @@ def sample_action(
 # ## Initial-state sampling
 # 
 # `(x, y)` uniform inside the arena, kept a `margin` away from the walls so the spawn pose is legal. Margin defaults to `bounding_radius()`, the same value `out_of_bounds` uses. `theta` uniform on `[-pi, pi)`.
-
-# In[19]:
 
 
 def sample_initial_state(
@@ -164,8 +150,6 @@ def sample_initial_state(
 # - **timeout**: loop ends with `len(actions) == len(states) - 1`. We pad one unused action so all three arrays are length `L`.
 # 
 # `hold_k` holds each sampled action constant for K steps before resampling. Default 1 resamples every step; 4-5 gives visibly smoother arcs.
-
-# In[ ]:
 
 
 def run_episode(
@@ -277,8 +261,6 @@ def run_episode(
 # 
 # Run 10 episodes, print lengths and termination reasons, then plot all 10 trajectories. Look for: (1) varied start poses, (2) episodes that don't all die on step 1, (3) smooth curves rather than noise.
 
-# In[21]:
-
 
 if __name__ == "__main__":
     rng = np.random.default_rng(42)
@@ -297,8 +279,6 @@ if __name__ == "__main__":
 
 
 # Pick the longest episode and eyeball a strip of its rendered frames. Confirms the renderer and dynamics agree.
-
-# In[22]:
 
 
 if __name__ == "__main__":
@@ -319,8 +299,6 @@ if __name__ == "__main__":
 # Stream episodes straight to one HDF5 file at constant memory. Datasets are resizable and chunked, with gzip on frames only (states/actions are tiny). Episodes shorter than `min_length` are dropped to avoid degenerate spawn-and-crash runs.
 # 
 # Every generative parameter is stored as an HDF5 attr, so the file is self-describing: `h5py.File(...).attrs` tells you exactly what produced it.
-
-# In[ ]:
 
 
 def collect_dataset(
@@ -485,8 +463,6 @@ def collect_dataset(
 # 
 # The real run. With the constants' sampling policy and `hold_k=4`, episodes average tens of steps before hitting a wall. Bump `hold_k` higher if they come out too short.
 
-# In[ ]:
-
 
 if __name__ == "__main__":
     out = DATA_PATH
@@ -500,8 +476,6 @@ if __name__ == "__main__":
 # ## Inspect run
 # 
 # Quick read-back to confirm shapes, attrs, and an example trajectory survived the round-trip.
-
-# In[ ]:
 
 
 if __name__ == "__main__":
@@ -524,10 +498,5 @@ if __name__ == "__main__":
 
     show_trajectory(states, title=f"longest episode (L={len(states)})", arrow_every=max(1, len(states) // 15))
     plt.show()
-
-
-# In[ ]:
-
-
 
 

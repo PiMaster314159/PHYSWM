@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # # Reconstruction probe
 # 
 # JEPA has no decoder by design. To *see* what a latent encodes, train a small decoder on the frozen encoder's outputs: frozen encoder -> z -> trained deconv -> frame. The encoder never updates; only the decoder learns to invert z back to pixels.
@@ -11,14 +8,8 @@
 # 
 # The predicted-next column makes heading aliasing visible: when the encoder confuses a heading with its 180-degree opposite, the predicted triangle points the wrong way.
 # 
-# > To generate `eval/reconstruct.py`, run from `PHYSWM/`:
-# > ```
-# > jupyter nbconvert --to python eval/reconstruct.ipynb
-# > ```
 
 # ## Path setup
-
-# In[ ]:
 
 
 import os
@@ -35,8 +26,6 @@ from config import DATA_PATH, CKPT_PATH, SEED, REPORT_DIR, GRID_SIZE, LATENT_DIM
 
 
 # ## Imports
-
-# In[ ]:
 
 
 import numpy as np
@@ -81,8 +70,6 @@ def _sample_batch(ds, n: int, seed: int = 0) -> dict:
 # ## Decoder
 # 
 # Mirror of the encoder. `latent -> linear -> (C, h0, w0) -> ConvTranspose x len(channels) -> (1, H, W)`. Each transpose (kernel 4, stride 2, pad 1) exactly doubles the spatial size, so `grid_size` must be divisible by `2 ** len(channels)` (8 for the default 3-stage encoder: 40, 64, 128 all qualify; 84 would not).
-
-# In[ ]:
 
 
 class Decoder(nn.Module):
@@ -135,8 +122,6 @@ class Decoder(nn.Module):
 # 
 # Frozen encoder (no_grad + eval), only the decoder learns. Frames are binary, so BCE-with-logits. This measures what the latent *can* be inverted to, not what the model was trained for.
 
-# In[ ]:
-
 
 def train_decoder(
     model: JEPA,
@@ -183,8 +168,6 @@ def train_decoder(
 # ## Visualize reconstructions
 # 
 # Four columns per row: `frame_t`, its reconstruction `recon(z_t)`, the true next frame, and the predicted next frame (decode `predict(z_t, action)`). The pred-next column is where heading aliasing shows: a 180-flipped triangle means the encoder confused the heading with its opposite. If the loader has `return_state=True`, each row is labeled with the true heading of `frame_t`.
-
-# In[ ]:
 
 
 @torch.no_grad()
@@ -246,8 +229,6 @@ def plot_reconstructions(
 # The structured alternative to the deconv decoder. Instead of learning pixels, decode the latent to `(x, y, theta)` with a linear probe, then draw the frame with the known `render_frame`. Zero learned pixel parameters, so every pixel is explained by the 3-number pose.
 # 
 # Trade-off vs the deconv decoder: this always draws a crisp triangle at the predicted pose (no blur, so it hides uncertainty), but a heading flip is unmistakable, the triangle points the wrong way. Use both: deconv shows what the latent kept (with uncertainty), this shows the pose the latent implies.
-
-# In[ ]:
 
 
 def plot_pose_reconstructions(
@@ -328,8 +309,6 @@ def plot_pose_reconstructions(
 # ## Run it
 # 
 # Load the run's checkpoint, train a decoder on the frozen encoder, and plot reconstructions for held-out transitions. Saves to `results/<RUN>/reconstructions.png`.
-
-# In[ ]:
 
 
 if __name__ == "__main__":

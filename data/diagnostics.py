@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # # Dataset diagnostics
 # 
 # Three quick checks to understand how much signal is in the dataset before committing to a model design:
@@ -9,16 +6,10 @@
 # 2. **Pixel-change distribution**: how many cells flip per step?
 # 3. **θ quantization ceiling**: the smallest rotation that changes a pixel, per resolution. The hard observability floor for heading - no model can beat this.
 # 
-# > To generate `data/diagnostics.py` for importing, run from `PHYSWM/`:
-# > ```
-# > jupyter nbconvert --to python data/diagnostics.ipynb
-# > ```
 
 # ## Path setup
 # 
 # Same root-finding pattern as `collect.ipynb` and `coverage.ipynb`.
-
-# In[ ]:
 
 
 import sys
@@ -32,8 +23,6 @@ from config import DATA_PATH
 
 
 # ## Imports
-
-# In[31]:
 
 
 import h5py
@@ -49,8 +38,6 @@ from sim.visualize import show_frame_strip
 # ## Load dataset
 # 
 # `load_h5` reads all arrays from an HDF5 file into a dict. Reusable across all notebooks. Set `load_frames=False` if you only need states/actions and want to avoid loading the (potentially large) frame array.
-
-# In[32]:
 
 
 def load_h5(h5_path: Union[str, Path], load_frames: bool = True) -> dict:
@@ -87,9 +74,6 @@ def load_h5(h5_path: Union[str, Path], load_frames: bool = True) -> dict:
     return data
 
 
-# In[ ]:
-
-
 if __name__ == "__main__":
     data = load_h5(DATA_PATH)
     frames          = data["frames"]
@@ -103,8 +87,6 @@ if __name__ == "__main__":
 # ## Frame identity rate
 # 
 # What fraction of consecutive frame pairs within episodes are pixel-identical? Expected to be low - translation alone (`v_mean·dt ≈ 0.018` world units ≈ 0.7 cells at 40×40) keeps most frames distinct even when rotation is sub-pixel.
-
-# In[34]:
 
 
 def frame_identity_rate(
@@ -133,9 +115,6 @@ def frame_identity_rate(
     return identical / total if total > 0 else 0.0
 
 
-# In[ ]:
-
-
 if __name__ == "__main__":
     rate = frame_identity_rate(frames, episode_starts, episode_lengths)
     print(f"identical: {rate:.2%}")
@@ -144,8 +123,6 @@ if __name__ == "__main__":
 # ## Per-step pixel-change distribution
 # 
 # How many cells flip between consecutive frames within episodes. Zero means the frame is truly identical; even a handful of boundary cells flipping gives the encoder something to work with.
-
-# In[36]:
 
 
 def pixel_change_distribution(
@@ -186,9 +163,6 @@ def pixel_change_distribution(
     return diffs
 
 
-# In[ ]:
-
-
 if __name__ == "__main__":
     _, ax = plt.subplots()
     diffs = pixel_change_distribution(frames, episode_starts, episode_lengths, ax=ax)
@@ -202,8 +176,6 @@ if __name__ == "__main__":
 # Fix the robot at the arena center, sweep θ over [-π, π) in 1° steps, and find where consecutive renders first differ. The gaps between those angles are the quantization intervals - the hard observability floor for heading. No model can recover θ finer than this.
 # 
 # Also shows a frame strip at sample headings so you can see the coarseness directly.
-
-# In[ ]:
 
 
 def theta_quantization_ceiling(
@@ -248,9 +220,6 @@ def theta_quantization_ceiling(
     return results
 
 
-# In[ ]:
-
-
 if __name__ == "__main__":
     results = theta_quantization_ceiling()
 
@@ -261,10 +230,5 @@ if __name__ == "__main__":
         fig = show_frame_strip(strip, titles=[f"{int(np.degrees(t))}°" for t in sample_thetas])
         fig.suptitle(f"{grid_size}x{grid_size}", y=1.10)
         plt.show()
-
-
-# In[ ]:
-
-
 
 

@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # # Dataset coverage diagnostics
 # 
 # Read an HDF5 dataset from `collect.ipynb` and check it's worth training on. Builds a 6-plot summary panel, then saves it plus every plot as its own PNG into a `<name>_coverage/` folder next to the dataset.
@@ -14,16 +11,10 @@
 # 
 # Two extra plots (`(x, y)` occupancy and the global `θ` histogram) are saved as standalone images but kept out of the panel. They mostly reflect the uniform spawn, so they are reference more than headline.
 # 
-# > To regenerate `data/coverage.py` for importing, run from `PHYSWM/`:
-# > ```
-# > jupyter nbconvert --to python data/coverage.ipynb
-# > ```
 
 # ## Path setup
 # 
 # Make the project root importable, same as `collect.ipynb`.
-
-# In[ ]:
 
 
 import sys
@@ -40,8 +31,6 @@ from config import DATA_PATH
 # 
 # Plain matplotlib, no seaborn.
 
-# In[ ]:
-
 
 import numpy as np
 import numpy.typing as npt
@@ -55,8 +44,6 @@ from typing import Mapping, Optional, Union
 # ## Helpers
 # 
 # `gaussian_pdf` is the analytic curve we overlay on the action histograms. `wrap_angle` puts angle differences in `[-pi, pi)` so a step across the `+-pi` seam reads as a small turn, not a full loop. `per_step_diffs` collects within-episode `Δθ` and `Δposition`, never crossing an episode boundary.
-
-# In[ ]:
 
 
 def gaussian_pdf(x: np.ndarray, mu: float, sigma: float) -> np.ndarray:
@@ -107,8 +94,6 @@ def per_step_diffs(
 # 
 # One histogram each for `v` and `ω`, with the configured Gaussian drawn on top. If the sampler is doing its job the bars track the curve. A small pile-up at `v = 0` or `v = 1` is just the clip and is expected.
 
-# In[ ]:
-
 
 def plot_v_hist(actions: np.ndarray, attrs: Mapping, ax: Axes) -> None:
     """Histogram of linear velocity v, with its configured Gaussian overlaid."""
@@ -142,8 +127,6 @@ def plot_omega_hist(actions: np.ndarray, attrs: Mapping, ax: Axes) -> None:
 # The headline is the heading-coverage map: for each `(x, y)` bin, the entropy of the headings seen there. High and even means the robot faced all directions everywhere; cold spots are heading-biased regions where probes will do unevenly.
 # 
 # The `(x, y)` occupancy and global `θ` histogram (saved as extras, not in the panel) mostly just reflect the uniform spawn, so don't read too much into them.
-
-# In[ ]:
 
 
 def plot_xy_hist(states: np.ndarray, world_bounds: tuple, ax: Axes) -> None:
@@ -221,8 +204,6 @@ def plot_theta_entropy_map(
 # 
 # The episode-length histogram is stacked by termination. Mostly walls is good; if timeouts dominate, `max_steps` is too low or the robot can't reach the walls.
 
-# In[ ]:
-
 
 def plot_dtheta(d_theta: np.ndarray, attrs: Mapping, ax: Axes) -> None:
     """Within-episode per-step heading change."""
@@ -270,8 +251,6 @@ def plot_episode_lengths(
 # ## Summary + entry point
 # 
 # `print_summary` is the quick numeric readout. `plot_coverage` is the one to call: give it a dataset path and it prints the summary, builds the 6-plot panel, and writes the panel plus each plot's own PNG into `<name>_coverage/` next to the dataset.
-
-# In[ ]:
 
 
 def print_summary(h5) -> None:
@@ -378,8 +357,6 @@ def plot_coverage(h5_path: Union[str, Path], save_dir: Optional[Union[str, Path]
 # ## Demo
 # 
 # Runs on the dataset `collect.ipynb` just produced. Guarded with `if __name__ == "__main__":` so it doesn't fire when this notebook is exported and imported elsewhere.
-
-# In[ ]:
 
 
 if __name__ == "__main__":

@@ -79,6 +79,14 @@ def pose_stats(states):
 def standardize(t, mean, std):   return (t - mean) / std
 def unstandardize(t, mean, std): return t * std + mean
 
+
+def pearson_per_dim(Z, t):
+    """Per-dim Pearson correlation of each latent dim in Z (N,D) with a 1-D target t (N,).
+    Returns (D,). Shared by the ego + grounded eval hooks."""
+    Zc = Z - Z.mean(0, keepdim=True)
+    tc = t - t.mean()
+    return (Zc * tc.unsqueeze(1)).mean(0) / (Z.std(0) * t.std() + 1e-8)
+
 def conv_trunk(grid_size, in_channels, channels):
     layers, c = [], in_channels
     for c_out in channels:

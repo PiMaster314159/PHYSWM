@@ -1,20 +1,11 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # # Visualization
 # 
 # Matplotlib helpers for eyeballing frames. Human sanity-checking only. The model never sees matplotlib output, only raw binary frames from `render_frame`.
 # 
 # Good sanity check: before generating thousands of episodes, render a few frames at your training resolution, blow them up with nearest-neighbor interpolation, and confirm by eye that the triangle points the way theta says it should.
 # 
-# > To generate `visualize.py` for importing, run from `PHYSWM/`:
-# > ```
-# > jupyter nbconvert --to python sim/visualize.ipynb
-# > ```
 
 # ## Imports
-
-# In[ ]:
 
 
 import numpy as np
@@ -30,8 +21,6 @@ from config import WORLD_BOUNDS
 # ## Input-validation helper
 # 
 # Convert frame to numpy array, check it is 2D.
-
-# In[ ]:
 
 
 def _as_frame(frame: npt.ArrayLike) -> np.ndarray:
@@ -61,8 +50,6 @@ def _as_frame(frame: npt.ArrayLike) -> np.ndarray:
 # ## Single frame
 # 
 # Draw one binary frame. Nearest-neighbor interpolation so individual cells stay visible at low resolutions like 40x40.
-
-# In[ ]:
 
 
 def show_frame(
@@ -102,8 +89,6 @@ def show_frame(
 # ## Strip of frames
 # 
 # Frames side-by-side. Good for spot-checking a single rolled-out episode.
-
-# In[ ]:
 
 
 def show_frame_strip(
@@ -152,8 +137,6 @@ def show_frame_strip(
 # Plot continuous `(x, y, theta)` in world coordinates, with arrows for heading at each step and a red box for the world bounds. Useful for debugging episode collection (e.g. confirming an `env_step` loop drove the robot as expected before termination).
 # 
 # Works on the continuous state, not on rendered frames. The model never sees this view.
-
-# In[ ]:
 
 
 def show_trajectory(
@@ -237,8 +220,6 @@ def show_trajectory(
 # 
 # Tests only confirm the helpers don't crash on real frames. Graphs are a visual sanity check, not assertions.
 
-# In[ ]:
-
 
 def _test_visualize():
     """Smoke test. Confirms the helpers don't crash on real frames."""
@@ -283,9 +264,6 @@ def _test_visualize():
         raise AssertionError("Expected ValueError for wrong-shape states")
 
     print("All visualize tests passed.")
-
-
-# In[14]:
 
 
 if __name__ == "__main__":

@@ -9,3 +9,10 @@ results/_archive/
 # Large regenerable binaries — backed up via OneDrive, not versioned in git
 *.pt
 data/datasets/*.h5
+
+# Python bytecode caches (all folders)
+__pycache__/
+*.pyc
+
+# Local deck / scratch scripts — kept on disk, out of git
+analysis/_*

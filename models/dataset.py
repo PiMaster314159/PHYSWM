@@ -1,22 +1,13 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # # Transition dataset
 # 
 # Turns collected episodes into transition pairs for JEPA training. One training example: `(frame_t, action_t, frame_{t+1})`.
 # 
 # Two-representation rule: the model only ever sees `frame` and `action`. True state `(x, y, theta)` is returned only when `return_state=True`, for probing/eval only. Never feed it to the model.
 # 
-# > To generate `models/dataset.py` for importing, run from `PHYSWM/`:
-# > ```
-# > jupyter nbconvert --to python models/dataset.ipynb
-# > ```
 
 # ## Path setup
 # 
 # Same root-finding pattern as the files in `data`.
-
-# In[ ]:
 
 
 import sys
@@ -30,8 +21,6 @@ from config import DATA_PATH, BATCH_SIZE, SEED, PRED_STEP
 
 
 # ## Imports
-
-# In[ ]:
 
 
 import h5py
@@ -47,8 +36,6 @@ from typing import Optional, Union
 # PyTorch Dataset over the HDF5 file. Loads everything into RAM on init so DataLoader workers don't fight over an open HDF5 handle. Pass a list of episode indices to `episodes` for train/val subsets (the split itself lives in `make_dataloaders`).
 # 
 # `step` sets the prediction horizon. `step=1` is single-step (`frame_t -> frame_{t+1}`). `step>1` forms hold-aligned, non-overlapping windows so each transition spans one constant action; it requires `step` to divide the dataset's `hold_k`. Over a window the same action is applied `step` times, so `frame_{t+step}` is where that one action takes the robot, and the accumulated rotation is large enough that heading finally matters to the prediction.
-
-# In[ ]:
 
 
 class RobotTransitions(Dataset):
@@ -156,8 +143,6 @@ class RobotTransitions(Dataset):
 # ## make_dataloaders
 # 
 # Shuffles episode indices with a seeded RNG, splits into train/val, and returns two DataLoaders. Split is at the episode level so consecutive frames from the same trajectory never straddle train and val.
-
-# In[ ]:
 
 
 class RolloutWindows(Dataset):
@@ -445,8 +430,6 @@ def make_dataloaders(
 # 
 # Sanity checks for the index logic, tensor shapes, the episode-boundary guarantee, and DataLoader batch shapes.
 
-# In[ ]:
-
 
 def _test_dataset():
     """Sanity tests for RobotTransitions and make_dataloaders."""
@@ -504,9 +487,6 @@ def _test_dataset():
     n_train, n_val = len(train_dl.dataset), len(val_dl.dataset)
     print(f"split: {n_train} train + {n_val} val = {n_train + n_val} transitions")
     print("All dataset tests passed.")
-
-
-# In[ ]:
 
 
 if __name__ == "__main__":

@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # # Probing the frozen latent
 # 
 # Did the encoder secretly learn physical state from pixels alone? Probing measures this by training a small network on top of frozen encoder representations:
@@ -11,12 +8,6 @@
 # 
 # The encoder is never updated. If the probe achieves low error, the latent z must already encode position and heading. Two probe types: a linear probe (one matrix, tests linear readability) and an MLP probe (one hidden layer, tests whether information is present even if entangled).
 # 
-# > To generate `eval/probe.py` for importing, run from `PHYSWM/`:
-# > ```
-# > jupyter nbconvert --to python eval/probe.ipynb
-# > ```
-
-# In[ ]:
 
 
 import sys
@@ -30,8 +21,6 @@ from config import DATA_PATH, CKPT_PATH, SEED, REPORT_DIR
 
 
 # ## Path setup
-
-# In[ ]:
 
 
 import numpy as np
@@ -51,8 +40,6 @@ except ImportError:
 
 
 # ## Imports
-
-# In[ ]:
 
 
 @torch.no_grad()
@@ -85,8 +72,6 @@ def extract_latents(model: JEPA, dl: DataLoader, device: str):
 # 
 # Run the frozen encoder once over the full dataset and cache the results. The probe trains on these cached tensors directly, so the encoder is never called again during probe training.
 
-# In[ ]:
-
 
 def state_to_target(states: torch.Tensor) -> torch.Tensor:
     """(N, 3) (x, y, theta) -> (N, 4) (x, y, cos theta, sin theta).
@@ -117,8 +102,6 @@ def angular_error(theta_pred: torch.Tensor, theta_true: torch.Tensor) -> torch.T
 # 
 # Heading is circular so the probe predicts `(cos theta, sin theta)` instead of raw theta, then `target_to_state` recovers the angle with `atan2`. `angular_error` wraps the difference into `[0, pi]` so +179 and -179 degrees correctly count as 2 degrees apart.
 
-# In[ ]:
-
 
 def make_linear_probe(latent_dim: int, out_dim: int = 4) -> nn.Linear:
     """Single linear layer: z -> (x, y, cos theta, sin theta).
@@ -140,8 +123,6 @@ def make_mlp_probe(latent_dim: int, out_dim: int = 4, hidden: int = 128) -> nn.S
 # ## Probes
 # 
 # Two small regressors from latent to the 4-vector target `(x, y, cos theta, sin theta)`.
-
-# In[ ]:
 
 
 def train_probe(
@@ -187,8 +168,6 @@ def train_probe(
 # ## Train probe
 # 
 # Standard supervised regression on the precomputed latents. The encoder is never called here.
-
-# In[ ]:
 
 
 @torch.no_grad()
@@ -246,8 +225,6 @@ def evaluate_probe(
 # 
 # Score a trained probe on held-out val latents. Reports position RMSE in world units and heading MAE in degrees. Chance level for position is ~0.29 (predicting the mean); chance level for heading is 90 degrees.
 
-# In[ ]:
-
 
 def chance_baseline(
     states_tr: torch.Tensor,
@@ -276,8 +253,6 @@ def chance_baseline(
 # ## Chance baseline
 # 
 # What the metrics look like for a probe that ignores the latent entirely. A real probe near these values learned nothing.
-
-# In[ ]:
 
 
 def _print_table(results: dict) -> None:
@@ -321,8 +296,6 @@ def save_probe_table(results: dict, path: Union[str, Path]) -> None:
 # ## Run probe
 # 
 # Load a checkpoint, extract frozen latents, fit both probes, and print a comparison table against the chance baseline.
-
-# In[ ]:
 
 
 def run_probe(
@@ -407,8 +380,6 @@ def run_probe(
 # - x and y panels: smooth gradients running in different directions. The latent cloud laid out as a map of the arena. Warped, not a clean grid, is fine.
 # - theta panel: smooth cyclic color = heading encoded. Aliasing shows up as color jumps, or the same hue in two separate regions (two headings the encoder confused).
 
-# In[ ]:
-
 
 def pca_2d(Z: torch.Tensor) -> tuple:
     """Project latents onto their top 2 principal components.
@@ -438,9 +409,6 @@ def pca_2d(Z: torch.Tensor) -> tuple:
     coords        = (Zc @ Vh[:2].T).cpu().numpy()
     explained_var = float((S[:2] ** 2).sum() / (S ** 2).sum())
     return coords, explained_var
-
-
-# In[ ]:
 
 
 def plot_latent_pca(
@@ -505,8 +473,6 @@ def plot_latent_pca(
 # 
 # - position panels: predicted (x, y), the arena rebuilt from the latent, colored by true x then true y. Clean gradient aligned with the axis = position decoded.
 # - heading panel: predicted angle vs true angle. Tight diagonal = heading decoded. A faint second band offset by ~180 = aliasing (encoder confusing opposite headings). Vertical spread = noise. Colored by angular error.
-
-# In[ ]:
 
 
 def plot_latent_probe_axes(
@@ -602,8 +568,6 @@ def plot_latent_probe_axes(
 # 
 # Runs the full probe pipeline on a random-weight encoder to verify the pipeline works. Results will be near chance since the encoder is untrained.
 
-# In[ ]:
-
 
 def _test_probe():
     if not DATA_PATH.exists():
@@ -625,9 +589,6 @@ def _test_probe():
     print("All probe tests passed.")
 
 
-# In[ ]:
-
-
 if __name__ == "__main__":
     _test_probe()
 
@@ -635,8 +596,6 @@ if __name__ == "__main__":
 # ## Visualize the trained latent
 # 
 # Load the checkpoint, extract val latents, plot. Same SEED as training, so these are the held-out episodes.
-
-# In[ ]:
 
 
 if __name__ == "__main__":

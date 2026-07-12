@@ -11,7 +11,7 @@ from eval.probe import (
     run_probe, extract_latents, state_to_target, chance_baseline,
     make_linear_probe, make_mlp_probe, train_probe, evaluate_probe, save_probe_table,
 )
-from diagnose import pearson_per_dim
+from models.components import pearson_per_dim
 
 
 def evaluate(model, a, data_path, report_dir):

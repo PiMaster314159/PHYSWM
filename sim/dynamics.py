@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # # Dynamics
 # 
 # First-order kinematics simulator. Advances robot state `(x, y, theta)` given action `(v, omega)`. No inertia.
@@ -12,14 +9,8 @@
 # - `x_{t+1}     = x_t + v * cos(theta_{t+1}) * dt`
 # - `y_{t+1}     = y_t + v * sin(theta_{t+1}) * dt`
 # 
-# > To generate `dynamics.py` for importing, run from `PHYSWM/`:
-# > ```
-# > jupyter nbconvert --to python sim/dynamics.ipynb
-# > ```
 
 # # Imports
-
-# In[ ]:
 
 
 import numpy as np
@@ -30,8 +21,6 @@ from config import DT
 # ## Angle wrapping
 # 
 # Bounds angle to `[-pi, pi)`. Wraps if outside range.
-
-# In[6]:
 
 
 def wrap_theta(theta: float) -> float:
@@ -53,8 +42,6 @@ def wrap_theta(theta: float) -> float:
 # ## Input-validation helpers
 # 
 # Convert array-like input to numpy float array. Validates shape and finiteness.
-
-# In[7]:
 
 
 def _as_state(state: npt.ArrayLike) -> np.ndarray:
@@ -111,8 +98,6 @@ def _as_action(action: npt.ArrayLike) -> np.ndarray:
 
 # # Single Step Dynamics
 
-# In[ ]:
-
 
 def step(state: npt.ArrayLike, action: npt.ArrayLike, dt: float = DT) -> np.ndarray:
     """Advance the robot state by one timestep.
@@ -149,8 +134,6 @@ def step(state: npt.ArrayLike, action: npt.ArrayLike, dt: float = DT) -> np.ndar
 # 
 # Convenience wrapper. Takes a sequence of actions and returns the full state trajectory, shape `(T+1, 3)`.
 
-# In[ ]:
-
 
 def step_rollout(initial_state: npt.ArrayLike, actions: npt.ArrayLike, dt: float = DT) -> np.ndarray:
     """Execute a sequence of actions from an initial state.
@@ -186,8 +169,6 @@ def step_rollout(initial_state: npt.ArrayLike, actions: npt.ArrayLike, dt: float
 # 
 # Sanity tests for the dynamics.
 
-# In[10]:
-
 
 def _test_step_dynamics():
     """Sanity tests for the dynamics."""
@@ -222,9 +203,6 @@ def _test_step_dynamics():
     assert -np.pi <= next_state[2] < np.pi, f"theta not wrapped: {next_state[2]}"
 
     print("All dynamics tests passed.")
-
-
-# In[11]:
 
 
 if __name__ == "__main__":

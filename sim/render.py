@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # # Renderer
 # 
 # Occupancy grid renderer. Robot drawn as isosceles triangle (altitude `L`, base `W`) so heading is visually distinguishable.
@@ -11,16 +8,10 @@
 # 
 # World convention: row 0 is upper `y` boundary, col 0 is left `x` boundary.
 # 
-# > To generate `render.py` for importing, run from `PHYSWM/`:
-# > ```
-# > jupyter nbconvert --to python sim/render.ipynb
-# > ```
 
 # ## Imports & triangle constants
 # 
 # Triangle dimensions `L`, `W` and `WORLD_BOUNDS` come from the project-wide `config.py` (single source for the whole project).
-
-# In[ ]:
 
 
 import numpy as np
@@ -36,8 +27,6 @@ from config import (
 # ## Triangle in local coordinates
 # 
 # Triangle built once in the robot's body frame, centered on its centroid. `(x, y)` in world coordinates maps to the geometric center of the shape.
-
-# In[7]:
 
 
 def make_triangle(L: float = L, W: float = W) -> np.ndarray:
@@ -66,8 +55,6 @@ def make_triangle(L: float = L, W: float = W) -> np.ndarray:
 # ## Coordinate transforms
 # 
 # Converts world coordinates to the robot's local (body) frame. Cheaper than rotating the triangle every call: transform the grid points into body frame once, test against the untransformed triangle.
-
-# In[8]:
 
 
 def world_to_triangle_coords(points: np.ndarray, state: npt.ArrayLike) -> np.ndarray:
@@ -98,8 +85,6 @@ def world_to_triangle_coords(points: np.ndarray, state: npt.ArrayLike) -> np.nda
 # 
 # Half-plane test: a point is inside the triangle iff the signs of all three edge cross products agree. Handles both winding orders so vertex ordering from `make_triangle` does not matter.
 
-# In[9]:
-
 
 def cross2d(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """2D scalar cross product a x b, vectorized.
@@ -114,9 +99,6 @@ def cross2d(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         Scalar cross product at each position.
     """
     return a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
-
-
-# In[10]:
 
 
 def points_in_triangle(points: np.ndarray, triangle_vertices: np.ndarray) -> np.ndarray:
@@ -151,8 +133,6 @@ def points_in_triangle(points: np.ndarray, triangle_vertices: np.ndarray) -> np.
 # ## Grid cell centers
 # 
 # Computes world `(x, y)` at each cell center of a `grid_size x grid_size` image. Used in `render_frame` to test which cells fall inside the triangle.
-
-# In[ ]:
 
 
 def grid_cell_centers(
@@ -189,8 +169,6 @@ def grid_cell_centers(
 # 
 # Reuse `_as_state` from `dynamics.py` rather than duplicating validation logic.
 
-# In[ ]:
-
 
 from sim.dynamics import _as_state
 
@@ -198,8 +176,6 @@ from sim.dynamics import _as_state
 # ## Main render function
 # 
 # Core of the module: converts a robot state to a binary occupancy frame. This is what the model's encoder receives as input.
-
-# In[ ]:
 
 
 def render_frame(
@@ -295,8 +271,6 @@ def render_frame(
 # 
 # Helper for matplotlib overlays (e.g. triangle outline on a debug plot). Not used by the renderer itself.
 
-# In[14]:
-
 
 def triangle_world_vertices(state: npt.ArrayLike, L: float = L, W: float = W) -> np.ndarray:
     """Triangle vertices in world coordinates.
@@ -329,8 +303,6 @@ def triangle_world_vertices(state: npt.ArrayLike, L: float = L, W: float = W) ->
 # ## Tests
 # 
 # Sanity tests for the renderer.
-
-# In[ ]:
 
 
 def _test_renderer():
@@ -367,9 +339,6 @@ def _test_renderer():
         raise AssertionError("expected ValueError for unknown marker")
 
     print("All renderer tests passed.")
-
-
-# In[16]:
 
 
 if __name__ == "__main__":

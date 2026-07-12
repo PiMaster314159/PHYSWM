@@ -1,24 +1,15 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # # Environment: boundary detection + `env_step`
 # 
 # `env_step` wraps the dynamics step and adds a `done` flag. Decides when an episode ends. The data-collection loop calls `env_step` until `done` is True.
 # 
 # Boundary rule: episode ends as soon as the robot's bounding circle (centroid + radius) crosses any world edge.
 # 
-# > To generate `environment.py` for importing, run from `PHYSWM/`:
-# > ```
-# > jupyter nbconvert --to python sim/environment.ipynb
-# > ```
 
 # ## Imports
 # 
 # `step` and `_as_state` from `sim.dynamics`; the fixed constants `DT`, `L`, `W`, `WORLD_BOUNDS` from `config.py`.
 # 
 # Run from the `PHYSWM` root so both `config` and `sim.*` resolve.
-
-# In[ ]:
 
 
 import numpy as np
@@ -34,8 +25,6 @@ from sim.dynamics import step, _as_state
 # Max distance from the centered triangle's centroid to any of its vertices.
 # 
 # After centering in `make_triangle`, the tip sits at `+2L/3` along local-x and the back corners at `(-L/3, ±W/2)`. Whichever is farther bounds the triangle from the outside. With `L=0.12, W=0.06` this is `0.08`.
-
-# In[ ]:
 
 
 def bounding_radius(L: float = L, W: float = W) -> float:
@@ -59,8 +48,6 @@ def bounding_radius(L: float = L, W: float = W) -> float:
 # ## Boundary check
 # 
 # `out_of_bounds` is `True` iff the bounding circle crosses any world edge. Heading-independent by construction (only looks at `x`, `y`).
-
-# In[ ]:
 
 
 def out_of_bounds(
@@ -111,8 +98,6 @@ def out_of_bounds(
 # 
 # Wrapper around `step` + `out_of_bounds`. The data-collection loop should never have to know the boundary rule directly.
 
-# In[ ]:
-
 
 def env_step(
     state: npt.ArrayLike,
@@ -151,8 +136,6 @@ def env_step(
 # ## Tests
 # 
 # Sanity tests for boundary detection.
-
-# In[5]:
 
 
 def _test_environment():
@@ -197,9 +180,6 @@ def _test_environment():
     assert hit, "Robot driving forward should have hit the right wall"
 
     print("All environment tests passed.")
-
-
-# In[6]:
 
 
 if __name__ == "__main__":
