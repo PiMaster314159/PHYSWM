@@ -12,6 +12,7 @@ from eval.probe import (
     make_linear_probe, make_mlp_probe, train_probe, evaluate_probe, save_probe_table,
 )
 from models.components import pearson_per_dim
+from eval import metrics
 
 
 def evaluate(model, a, data_path, report_dir):
@@ -66,3 +67,9 @@ def evaluate(model, a, data_path, report_dir):
         with open(report_dir / "actuator_recovery.csv", "w", newline="") as _fc:
             _w = csv.writer(_fc); _w.writerow(["true_gain", "learned_a_v", "a_omega"])
             _w.writerow([f"{true_gain:.4f}", f"{learned_av:.4f}", f"{model.predictor.log_a_omega.exp().item():.4f}"])
+
+    sections = {}
+    if a.learn_coeffs:
+        sections["coeffs"] = {"a_v": model.predictor.log_a_v.exp().item(),
+                              "a_omega": model.predictor.log_a_omega.exp().item()}
+    metrics.finalize(model, a, data_path, report_dir, **sections)

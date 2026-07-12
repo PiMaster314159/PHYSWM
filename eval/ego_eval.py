@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import config as C
 from models.components import state_to_target, pearson_per_dim
 from models.dataset import make_dataloaders
+from eval import metrics
 
 
 @torch.no_grad()
@@ -144,3 +145,7 @@ def evaluate(model, a, data_path, report_dir):
     with open(report_dir / "predict_eval.csv", "w", newline="") as _fp:
         _w = csv.writer(_fp); _w.writerow(["pred_pos_err", "pred_theta_mae_deg"])
         _w.writerow([f"{pred_pos_err:.4f}", f"{pred_theta_mae:.4f}"])
+
+    metrics.finalize(model, a, data_path, report_dir,
+                     coeffs={"a_v": model.log_a_v.exp().item(), "a_omega": model.log_a_omega.exp().item()},
+                     dynamics={"pred_pos_err": pred_pos_err, "pred_theta_mae_deg": pred_theta_mae})

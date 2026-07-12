@@ -228,12 +228,6 @@ def main():
         print(f"  {mt['model']:22s}  final_lat {mt['final_lat']:.3f}  "
               f"final_head {mt['final_head_deg']:5.1f} deg  max|y| {mt['max_excursion']:.3f}  "
               f"rms_lat {mt['rms_lat']:.3f}  {'IN' if mt['in_bounds'] else 'OUT of'} bounds")
-        if name != "unicycle":                      # merge control result into the run's metrics.json
-            ck = Path(a.ckpt_for(name))
-            if len(ck.parts) >= 4 and ck.parent.parent.parent.name == "checkpoints":   # checkpoints/<run>/<model>/<tag>.pt
-                from eval.metrics import update_mpc
-                rep = C.RESULTS_DIR / ck.parent.parent.name / ck.parent.name / ck.stem
-                update_mpc(rep, {k: mt[k] for k in ("final_lat", "final_head_deg", "max_excursion", "rms_lat", "in_bounds")})
 
     # overlay figure
     report = ROOT / "results" / "track_mpc"; report.mkdir(parents=True, exist_ok=True)
@@ -251,14 +245,6 @@ def main():
     out = report / f"wm_mpc_compare_theta{int(a.theta0_deg)}.png"
     fig.savefig(out, dpi=130)
     print(f"wrote {out}")
-
-    import csv as _csv                              # cross-model control summary (one row per model)
-    with open(report / "mpc_summary.csv", "w", newline="") as f:
-        w = _csv.writer(f); w.writerow(["model", "final_lat", "final_head_deg", "max_excursion", "rms_lat", "in_bounds"])
-        for label, _traj, mt in results:
-            w.writerow([label, f"{mt['final_lat']:.4f}", f"{mt['final_head_deg']:.4f}",
-                        f"{mt['max_excursion']:.4f}", f"{mt['rms_lat']:.4f}", int(mt["in_bounds"])])
-    print(f"wrote {report / 'mpc_summary.csv'}")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from eval.probe import (
     run_probe, extract_latents, state_to_target, plot_latent_pca, plot_latent_probe_axes,
 )
 from eval.reconstruct import train_decoder, plot_reconstructions, plot_pose_reconstructions
+from eval import metrics
 
 
 def evaluate(model, a, data_path, report_dir):
@@ -44,3 +45,5 @@ def evaluate(model, a, data_path, report_dir):
     if a.predictor_mode == "physics":
         print(f"learned scales: a_pos={model.predictor.log_a_pos.exp().item():.3f}  "
               f"a_theta={model.predictor.log_a_theta.exp().item():.3f}")
+
+    metrics.finalize(model, a, data_path, report_dir)

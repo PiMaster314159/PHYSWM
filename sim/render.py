@@ -1,18 +1,19 @@
-# # Renderer
-# 
-# Occupancy grid renderer. Robot drawn as isosceles triangle (altitude `L`, base `W`) so heading is visually distinguishable.
-# 
-# Optional heading marker (`RENDER_MARKER` in config) paints a cue on the robot to break front/back symmetry, turning the frame grayscale. `"none"` is the classic binary triangle; `"dot"` adds a bright nose disc. Extend the marker if-chain in `render_frame` for more cues (gradient, fin, ...).
-# 
-# Resolution-agnostic: computes world coords of each grid cell's center, tests inclusion via half-plane (sign-of-cross-product) test. No fixed pixel sprite.
-# 
-# World convention: row 0 is upper `y` boundary, col 0 is left `x` boundary.
-# 
+"""
+Occupancy grid renderer. Robot drawn as isosceles triangle (altitude `L`, base `W`) so heading is visually distinguishable.
+Optional heading marker (`RENDER_MARKER` in config) paints a cue on the robot to break front/back symmetry, turning the frame 
+grayscale. `"none"` is the classic binary triangle; `"dot"` adds a bright nose disc. Extend the marker if-chain in `render_frame` 
+for more cues (gradient, fin, ...).
 
-# ## Imports & triangle constants
-# 
-# Triangle dimensions `L`, `W` and `WORLD_BOUNDS` come from the project-wide `config.py` (single source for the whole project).
+Resolution-agnostic: computes world coords of each grid cell's center, tests inclusion via half-plane (sign-of-cross-product) 
+test. No fixed pixel sprite.
 
+World convention: row 0 is upper `y` boundary, col 0 is left `x` boundary.
+"""
+
+"""
+Imports & triangle constants
+Triangle dimensions `L`, `W` and `WORLD_BOUNDS` come from the project-wide `config.py` (single source for the whole project).
+"""
 
 import numpy as np
 import numpy.typing as npt
