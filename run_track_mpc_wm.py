@@ -95,16 +95,15 @@ def build_neural(name, a):
     model.load_state_dict(sd, strict=False)
     model = model.to(dev).eval()
 
-    # JEPA's readout head outputs STANDARDIZED pose (run.py trains it against (pose-mean)/std).
-    # Recover the train-set stats so pose() can invert it back to world units [0,1] + true heading.
-    anchor_mean = anchor_std = None
-    if not physical:
+    # decode_pose un-standardizes JEPA's readout with the model's pose_mean/std buffers. Archived
+    # checkpoints predate those buffers (they load as the 0/1 default), so back-fill them from the
+    # dataset once, keeping decode_pose self-contained (new checkpoints carry the stats themselves).
+    if not physical and torch.allclose(model.pose_std, torch.ones_like(model.pose_std)):
         import h5py
-        from models.jepa import state_to_target
+        from models.components import pose_stats
         with h5py.File(C.DATASETS_DIR / f"{a.run}.h5", "r") as f:
             states = torch.from_numpy(f["states"][:]).float()
-        T = state_to_target(states)
-        anchor_mean = T.mean(0).numpy(); anchor_std = (T.std(0) + 1e-6).numpy()
+        model.set_pose_stats(*pose_stats(states))
 
     def to_frame(frame):
         return torch.from_numpy(np.asarray(frame, np.float32)).view(1, 1, g, g).to(dev)
@@ -125,16 +124,10 @@ def build_neural(name, a):
         s2 = model.predict(s, full_action(A)) if hasattr(model, "predict") else model.step(s, full_action(A))
         return s2.cpu().numpy()
 
-    if physical:
-        def pose(S):                                  # state IS pose: slice dims 0..3
-            return pose_from_xycs(S[:, :4])
-    else:
-        @torch.no_grad()
-        def pose(S):                                  # latent -> pose via the readout PROBE
-            z = torch.from_numpy(S.astype(np.float32)).to(dev)
-            p = model.state_head(z).cpu().numpy()      # (K,4) STANDARDIZED [x,y,cos,sin]
-            p = p * anchor_std + anchor_mean           # invert standardization -> world units
-            return pose_from_xycs(p)
+    @torch.no_grad()
+    def pose(S):                                      # one path for all models: decode -> [x,y,theta]
+        z = torch.from_numpy(S.astype(np.float32)).to(dev)
+        return pose_from_xycs(model.decode_pose(z).cpu().numpy())
 
     return observe, dynamics, pose, latent_dim, label
 

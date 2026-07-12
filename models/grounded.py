@@ -37,6 +37,7 @@ from config import (
     IN_CHANNELS, DT, PHYSICS_BLOCK_DIM,
 )
 
+from models.base import WorldModel
 from models.components import sigreg_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder
 
 
@@ -138,7 +139,7 @@ class GroundedPredictor(nn.Module):
 
 # ## GroundedJEPA
 
-class GroundedJEPA(nn.Module):
+class GroundedJEPA(WorldModel):
     """Split-latent JEPA: grounded physics block + free SIGReg block."""
 
     def __init__(
@@ -169,6 +170,10 @@ class GroundedJEPA(nn.Module):
 
     def predict(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         return self.predictor(z, action)
+
+    def decode_pose(self, z: torch.Tensor) -> torch.Tensor:
+        """(B, latent) -> (B, 4) real-unit pose: the block IS pose [x,y,cosθ,sinθ]."""
+        return z[:, :self.block_dim]
 
     def forward(self, frame: torch.Tensor, action: torch.Tensor, next_frame: torch.Tensor) -> dict:
         z             = self.encode(frame)

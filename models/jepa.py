@@ -26,7 +26,8 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").ex
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from models.components import sigreg_loss, state_to_target, conv_trunk, mlp
+from models.base import WorldModel
+from models.components import sigreg_loss, state_to_target, conv_trunk, mlp, unstandardize
 
 from config import (
     DATA_PATH, DT, PRED_STEP,
@@ -223,7 +224,7 @@ class Predictor(nn.Module):
 # In[ ]:
 
 
-class JEPA(nn.Module):
+class JEPA(WorldModel):
     """Vanilla LeWM: encoder + latent-space predictor.
 
     Parameters
@@ -281,6 +282,11 @@ class JEPA(nn.Module):
     def predict(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         """(z: (B, D), action: (B, 2)) -> predicted next latent (B, D)."""
         return self.predictor(z, action)
+
+    def decode_pose(self, z: torch.Tensor) -> torch.Tensor:
+        """(B, latent) -> (B, 4) real-unit pose [x,y,cosθ,sinθ]. The linear probe outputs
+        STANDARDIZED pose; the stored stats bring it back to world units."""
+        return unstandardize(self.state_head(z), self.pose_mean, self.pose_std)
 
     def forward(
         self,

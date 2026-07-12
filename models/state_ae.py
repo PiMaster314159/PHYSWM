@@ -29,6 +29,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from models.base import WorldModel
 from models.components import img_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder
 
 from config import GRID_SIZE, ENCODER_CHANNELS, IN_CHANNELS, ACTION_DIM, DT
@@ -91,7 +92,7 @@ class SpatialBroadcastDecoder(nn.Module):
         return torch.sigmoid(self.net(torch.cat([s_map, coords], dim=1)))
 
 
-class EgoWorldModel(nn.Module):
+class EgoWorldModel(WorldModel):
     """Encoder + renderer + gray-box dynamics.
 
     residual_budget > 0 enables a bounded learned correction on the dynamics
@@ -134,11 +135,16 @@ class EgoWorldModel(nn.Module):
     def render(self, s: torch.Tensor) -> torch.Tensor:
         return self.renderer(s)
 
-    def step(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+    def predict(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         nxt = unicycle_step(s, action, self.dt, self.log_a_v.exp(), self.log_a_omega.exp())
         if self.residual_budget > 0:
             nxt = nxt + self.residual_budget * torch.tanh(self.residual(torch.cat([s, action], dim=-1)))
         return nxt
+    step = predict   # alias: the state IS pose, so "step" and "predict" are the same call
+
+    def decode_pose(self, z: torch.Tensor) -> torch.Tensor:
+        """(B, 4) state IS real-unit pose [x,y,cosθ,sinθ]."""
+        return z[:, :4]
 
     def forward(self, frame: torch.Tensor, action: torch.Tensor, next_frame: torch.Tensor) -> dict:
         s      = self.encode(frame)

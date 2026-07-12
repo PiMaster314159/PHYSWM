@@ -1,5 +1,6 @@
 """Shared world-model interface + the pose-supervision loss family."""
 import torch, torch.nn as nn, torch.nn.functional as F
+from models.components import standardize, unstandardize
 
 class WorldModel(nn.Module):
     def __init__(self):
@@ -27,15 +28,17 @@ class WorldModel(nn.Module):
         m, s = self.pose_mean, self.pose_std
         parts = {}; L = out["z"].new_zeros(())
         if w > 0 and s_target is not None:                       # anchor / readout
-            a = F.mse_loss((self.decode_pose(out["z"]) - m) / s, (s_target - m) / s)
+            a = F.mse_loss(standardize(self.decode_pose(out["z"]), m, s),
+                           standardize(s_target, m, s))
             L = L + w * a; parts["anchor"] = a.item()
         if w_pred > 0 and s_next_target is not None:             # anchor_pred / readout_pred
-            ap = F.mse_loss((self.decode_pose(out["pred_next_z"]) - m) / s, (s_next_target - m) / s)
+            ap = F.mse_loss(standardize(self.decode_pose(out["pred_next_z"]), m, s),
+                            standardize(s_next_target, m, s))
             L = L + w_pred * ap; parts["anchor_pred"] = ap.item()
         return L, parts
-    
+
     def loss(self, out, batch, weights) -> tuple:
-        rep, parts  = self.representation_loss(out, batch)          # model-specific
+        rep, parts  = self.representation_loss(out, batch, weights)          # model-specific
         pose, pparts = self.pose_supervision(out, batch.get("s_target"),
                                             batch.get("s_next_target"),
                                             weights.get("anchor", 0.0),
