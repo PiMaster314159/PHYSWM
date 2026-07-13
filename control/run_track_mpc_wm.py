@@ -133,14 +133,17 @@ def build_neural(name, a):
 
 
 def make_costs(pose_fn, y_c, half, a):
+    def bound_cost(lat):
+        if getattr(a, "hard_bound", False):     # HARD: any predicted step outside -> ~inf -> MPPI rejects it
+            return np.where(np.abs(lat) > half, 1e6, 0.0)
+        viol = np.maximum(0.0, np.abs(lat) - half)      # SOFT: quadratic penalty past the edge
+        return a.w_bound * viol**2
     def running(S, A):
         P = pose_fn(S); lat = P[:, 1] - y_c; head = wrap(P[:, 2]); om = A[:, 0]
-        viol = np.maximum(0.0, np.abs(lat) - half)
-        return a.w_lat*lat**2 + a.w_head*head**2 + a.w_ctrl*om**2 + a.w_bound*viol**2
+        return a.w_lat*lat**2 + a.w_head*head**2 + a.w_ctrl*om**2 + bound_cost(lat)
     def terminal(S):
         P = pose_fn(S); lat = P[:, 1] - y_c; head = wrap(P[:, 2])
-        viol = np.maximum(0.0, np.abs(lat) - half)
-        return a.term_scale*(a.w_lat*lat**2 + a.w_head*head**2) + a.w_bound*viol**2
+        return a.term_scale*(a.w_lat*lat**2 + a.w_head*head**2) + bound_cost(lat)
     return running, terminal
 
 
@@ -288,6 +291,8 @@ def parse_args():
     p.add_argument("--omega-max", type=float, default=2.5); p.add_argument("--steps", type=int, default=18)
     p.add_argument("--w-lat", type=float, default=6.0); p.add_argument("--w-head", type=float, default=1.0)
     p.add_argument("--w-ctrl", type=float, default=0.05); p.add_argument("--w-bound", type=float, default=60.0)
+    p.add_argument("--hard-bound", action="store_true",
+                   help="hard track constraint: MPPI rejects any rolled trajectory that leaves the track (vs the soft w-bound penalty)")
     p.add_argument("--term-scale", type=float, default=4.0); p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda")
     p.add_argument("--sweep", default=None, choices=["theta", "width", "wlat"],
