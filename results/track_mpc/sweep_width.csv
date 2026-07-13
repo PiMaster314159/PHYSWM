@@ -1,0 +1,9 @@
+width,model,final_lat,max_excursion,in_bounds
+0.4,unicycle (oracle),0.0322,0.0777,1
+0.4,ego (gray-box),0.0260,0.0757,1
+0.4,grounded,0.0470,0.0803,1
+0.4,residual JEPA (probe),0.0610,0.0868,1
+0.15,unicycle (oracle),0.0283,0.0756,0
+0.15,ego (gray-box),0.0205,0.0744,1
+0.15,grounded,0.0480,0.0788,0
+0.15,residual JEPA (probe),0.0606,0.0857,0

@@ -190,24 +190,58 @@ def _sweep_color(label):
             else "#1baf7a" if "grounded" in l else "#eb6834")
 
 
+def _short_name(label):
+    l = label.lower()
+    return ("unicycle" if "oracle" in l or "unicycle" in l else
+            "jepa" if "jepa" in l else "grounded" if "grounded" in l else "ego")
+
+
+def _save_coords(traj, y_c, path):
+    """Per-step rollout coords: t, x, y, heading, lateral error, heading error."""
+    import csv as _csv
+    with open(path, "w", newline="") as f:
+        w = _csv.writer(f); w.writerow(["t", "x", "y", "theta_rad", "lateral_err", "heading_deg"])
+        for k, (x, y, th) in enumerate(traj):
+            w.writerow([k, f"{x:.5f}", f"{y:.5f}", f"{th:.5f}", f"{y - y_c:.5f}", f"{np.rad2deg(wrap(th)):.3f}"])
+
+
+def _overlay_figure(results, y_c, half, title, out):
+    """results: list of (label, traj, mt). Plot each model's path on the track."""
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.axhspan(y_c - half, y_c + half, color="0.92", label="track")
+    ax.axhline(y_c, color="0.6", ls="--", lw=1)
+    for label, traj, mt in results:
+        ax.plot(traj[:, 0], traj[:, 1], "-o", ms=3, color=_sweep_color(label), label=label)
+    ax.plot(results[0][1][0, 0], results[0][1][0, 1], "ks", ms=7)   # start marker
+    ax.set_xlabel("x (down-track)"); ax.set_ylabel("y"); ax.set_title(title)
+    ax.legend(fontsize=8, loc="upper right")
+    fig.tight_layout(); fig.savefig(out, dpi=130); plt.close(fig)
+
+
 def run_sweep(a, y_c, models):
     """Sweep one axis (start heading / track width / w_lat), all models, one figure + CSV.
     Models are built ONCE and rolled at every value."""
     vals = [float(x) for x in a.sweep_values.split(",") if x.strip()]
     axis = {"theta": "theta0_deg", "width": "track_width", "wlat": "w_lat"}[a.sweep]
     built = {name: build_one(name, a) for name in models}
+    report = ROOT / "results" / "track_mpc"; report.mkdir(parents=True, exist_ok=True)
+    traj_dir = report / f"sweep_{a.sweep}_traj"; traj_dir.mkdir(exist_ok=True)   # per-rollout coords + overlays
     print(f"=== MPC sweep: {a.sweep} = {vals} ===")
     rows = []
     for v in vals:
         setattr(a, axis, v)
         half = a.track_width / 2.0
+        per_val = []
         for name in models:
-            _, mt = roll_episode(built[name], a, y_c, half)
+            traj, mt = roll_episode(built[name], a, y_c, half)
+            per_val.append((mt["model"], traj, mt))
             rows.append((v, mt["model"], mt["final_lat"], mt["max_excursion"], mt["in_bounds"]))
             print(f"  {a.sweep}={v:6.2f}  {mt['model']:22s}  final_lat {mt['final_lat']:.3f}  "
                   f"max|y| {mt['max_excursion']:.3f}  {'IN' if mt['in_bounds'] else 'OUT'}")
+            _save_coords(traj, y_c, traj_dir / f"coords_{v:g}_{_short_name(mt['model'])}.csv")
+        _overlay_figure(per_val, y_c, half, f"MPC rollouts  ({a.sweep} = {v:g})", traj_dir / f"overlay_{v:g}.png")
+    print(f"per-rollout coords + overlays -> {traj_dir}")
 
-    report = ROOT / "results" / "track_mpc"; report.mkdir(parents=True, exist_ok=True)
     import csv as _csv
     with open(report / f"sweep_{a.sweep}.csv", "w", newline="") as f:
         w = _csv.writer(f); w.writerow([a.sweep, "model", "final_lat", "max_excursion", "in_bounds"])
@@ -324,6 +358,10 @@ def main():
             w.writerow([label, f"{mt['final_lat']:.4f}", f"{mt['final_head_deg']:.4f}",
                         f"{mt['max_excursion']:.4f}", f"{mt['rms_lat']:.4f}", int(mt["in_bounds"])])
     print(f"wrote {report / 'mpc_summary.csv'}")
+
+    for label, traj, mt in results:      # per-rollout coords: t, x, y, heading, lateral/heading error
+        _save_coords(traj, y_c, report / f"coords_theta{int(a.theta0_deg)}_{_short_name(label)}.csv")
+    print(f"wrote per-rollout coords -> {report}")
 
 
 if __name__ == "__main__":
