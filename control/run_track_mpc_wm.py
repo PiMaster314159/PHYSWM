@@ -144,8 +144,13 @@ def make_costs(pose_fn, y_c, half, a):
     return running, terminal
 
 
-def run_one(name, a, y_c, half):
+def build_one(name, a):
     observe, dynamics, pose, d, label = (build_unicycle(a) if name == "unicycle" else build_neural(name, a))
+    return observe, dynamics, pose, label
+
+
+def roll_episode(built, a, y_c, half):
+    observe, dynamics, pose, label = built
     running, terminal = make_costs(pose, y_c, half, a)
     rng = np.random.default_rng(a.seed)
     a_low = np.array([-a.omega_max]); a_high = np.array([a.omega_max])
@@ -175,6 +180,59 @@ def run_one(name, a, y_c, half):
     return traj, metrics
 
 
+def run_one(name, a, y_c, half):
+    return roll_episode(build_one(name, a), a, y_c, half)
+
+
+def _sweep_color(label):
+    l = label.lower()
+    return ("#898781" if "oracle" in l else "#2a78d6" if "ego" in l
+            else "#1baf7a" if "grounded" in l else "#eb6834")
+
+
+def run_sweep(a, y_c, models):
+    """Sweep one axis (start heading / track width / w_lat), all models, one figure + CSV.
+    Models are built ONCE and rolled at every value."""
+    vals = [float(x) for x in a.sweep_values.split(",") if x.strip()]
+    axis = {"theta": "theta0_deg", "width": "track_width", "wlat": "w_lat"}[a.sweep]
+    built = {name: build_one(name, a) for name in models}
+    print(f"=== MPC sweep: {a.sweep} = {vals} ===")
+    rows = []
+    for v in vals:
+        setattr(a, axis, v)
+        half = a.track_width / 2.0
+        for name in models:
+            _, mt = roll_episode(built[name], a, y_c, half)
+            rows.append((v, mt["model"], mt["final_lat"], mt["max_excursion"], mt["in_bounds"]))
+            print(f"  {a.sweep}={v:6.2f}  {mt['model']:22s}  final_lat {mt['final_lat']:.3f}  "
+                  f"max|y| {mt['max_excursion']:.3f}  {'IN' if mt['in_bounds'] else 'OUT'}")
+
+    report = ROOT / "results" / "track_mpc"; report.mkdir(parents=True, exist_ok=True)
+    import csv as _csv
+    with open(report / f"sweep_{a.sweep}.csv", "w", newline="") as f:
+        w = _csv.writer(f); w.writerow([a.sweep, "model", "final_lat", "max_excursion", "in_bounds"])
+        for r in rows:
+            w.writerow([r[0], r[1], f"{r[2]:.4f}", f"{r[3]:.4f}", int(r[4])])
+
+    labels = sorted({r[1] for r in rows}, key=lambda l: ("oracle" not in l.lower(), l))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.2))
+    for lbl in labels:
+        fl = [r[2] for r in rows if r[1] == lbl]
+        mx = [r[3] for r in rows if r[1] == lbl]
+        ax1.plot(vals, fl, "-o", ms=4, color=_sweep_color(lbl), label=lbl)
+        ax2.plot(vals, mx, "-o", ms=4, color=_sweep_color(lbl), label=lbl)
+    xlabel = {"theta": "start heading (deg)", "width": "track width", "wlat": "w_lat"}[a.sweep]
+    ax1.set_xlabel(xlabel); ax1.set_ylabel("final lateral error"); ax1.set_title("Convergence (final |y|)")
+    ax2.set_xlabel(xlabel); ax2.set_ylabel("peak |y| excursion"); ax2.set_title("Peak excursion / constraint")
+    if a.sweep == "width":     # boundary line: max|y| above it = left the track
+        ax2.plot(vals, [v / 2 for v in vals], "k--", lw=1, label="track edge (W/2)")
+    for ax in (ax1, ax2):
+        ax.grid(alpha=0.3); ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(report / f"sweep_{a.sweep}.png", dpi=140)
+    print(f"wrote {report / ('sweep_' + a.sweep + '.csv')}  and  sweep_{a.sweep}.png")
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="World-model MPC comparison on the straight track.")
     p.add_argument("--model", default="unicycle", help="comma list: unicycle,ego,grounded,jepa")
@@ -198,6 +256,9 @@ def parse_args():
     p.add_argument("--w-ctrl", type=float, default=0.05); p.add_argument("--w-bound", type=float, default=60.0)
     p.add_argument("--term-scale", type=float, default=4.0); p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda")
+    p.add_argument("--sweep", default=None, choices=["theta", "width", "wlat"],
+                   help="sweep an axis instead of a single run (start heading / track width / w-lat)")
+    p.add_argument("--sweep-values", default="", help="comma list for --sweep, e.g. 30,45,60,75,90")
     a = p.parse_args()
 
     def ckpt_for(name):
@@ -219,6 +280,10 @@ def main():
         import torch
         if a.device != "cpu" and not torch.cuda.is_available():
             a.device = "cpu"
+
+    if a.sweep:
+        run_sweep(a, y_c, models)
+        return
 
     print(f"=== world-model MPC: straight track (start y0={a.y0:+.2f}, theta={a.theta0_deg:.0f} deg) ===")
     results = []
