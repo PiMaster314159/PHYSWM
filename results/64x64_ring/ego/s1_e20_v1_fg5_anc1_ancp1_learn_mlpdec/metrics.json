@@ -1,0 +1,27 @@
+{
+  "model": "ego",
+  "run": "64x64_ring",
+  "tag": "s1_e20_v1_fg5_anc1_ancp1_learn_mlpdec",
+  "pose": {
+    "theta_mae_deg": 1.5193593502044678,
+    "theta_flip_pct": 0.0,
+    "x_r2": 0.9947202801704407,
+    "y_r2": 0.994676947593689,
+    "pos_rmse": 0.023257499560713768
+  },
+  "coeffs": {
+    "a_v": 1.0608532428741455,
+    "a_omega": 0.9767714142799377
+  },
+  "dynamics": {
+    "pred_pos_err": 0.017211263384959333,
+    "pred_theta_mae_deg": 1.5205576394892226
+  },
+  "mpc": {
+    "final_lat": 0.02398196795358898,
+    "final_head_deg": 5.646816967775499,
+    "max_excursion": 0.07957406331886996,
+    "rms_lat": 0.05637173454109241,
+    "in_bounds": true
+  }
+}

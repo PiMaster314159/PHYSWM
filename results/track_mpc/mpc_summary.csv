@@ -1,0 +1,5 @@
+model,final_lat,final_head_deg,max_excursion,rms_lat,in_bounds
+unicycle (oracle),0.0322,3.2832,0.0777,0.0552,1
+ego (gray-box),0.0240,5.6468,0.0796,0.0564,1
+grounded,0.0348,2.9021,0.0788,0.0560,1
+residual JEPA (probe),0.0283,7.5299,0.0778,0.0527,1
