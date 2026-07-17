@@ -11,7 +11,7 @@ from eval.probe import (
     run_probe, extract_latents, state_to_target, chance_baseline,
     make_linear_probe, make_mlp_probe, train_probe, evaluate_probe, save_probe_table,
 )
-from models.components import pearson_per_dim
+from models.components import pearson_per_dim, format_residual
 from eval import metrics
 
 
@@ -67,6 +67,10 @@ def evaluate(model, a, data_path, report_dir):
         with open(report_dir / "actuator_recovery.csv", "w", newline="") as _fc:
             _w = csv.writer(_fc); _w.writerow(["true_gain", "learned_a_v", "a_omega"])
             _w.writerow([f"{true_gain:.4f}", f"{learned_av:.4f}", f"{model.predictor.log_a_omega.exp().item():.4f}"])
+
+    if model.predictor.residual is not None:   # structured residual: coeffs vary with the free latent
+        free = Zva[:, a.block_dim:].mean(0, keepdim=True).to(device)
+        print("\n" + format_residual(model.predictor.residual, free))
 
     sections = {}
     if a.learn_coeffs:

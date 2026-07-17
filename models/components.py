@@ -194,3 +194,30 @@ class StructuredResidual(nn.Module):
     def l1(self):
         w = self.coef_head.weight if self.free_dim > 0 else self.coef
         return w.abs().mean()
+
+    _BASIS = ["1", "v", "w", "v^2", "v*w", "w^2", "v^3", "v^2*w", "v*w^2", "w^3"]
+    _CHANNELS = ["forward", "lateral", "omega"]
+
+    @torch.no_grad()
+    def named_coeffs(self, free=None):
+        """{channel: {basis_term: coefficient}}. Global residuals read self.coef directly; latent-
+        modulated ones need a (B, free_dim) free latent and are averaged over the batch."""
+        if self.free_dim > 0:
+            if free is None:
+                raise ValueError("latent-modulated residual needs a free latent to evaluate coefficients")
+            c = self.coef_head(free).view(-1, 3, self.n_basis).mean(0)
+        else:
+            c = self.coef
+        names = self._BASIS[:self.n_basis]
+        return {ch: {names[k]: c[i, k].item() for k in range(self.n_basis)} for i, ch in enumerate(self._CHANNELS)}
+
+
+def format_residual(residual, free=None, thresh=1e-3):
+    """Human-readable dump of a StructuredResidual's learned law. Drag shows up as a NEGATIVE
+    v^2 coefficient on the 'forward' channel; slip as v*w on 'lateral'; understeer as w^2 on 'omega'."""
+    lines = ["-- recovered gray-box residual g (raw coeff on each basis term; drag = negative v^2 on 'forward') --"]
+    for ch, terms in residual.named_coeffs(free).items():
+        top = sorted(terms.items(), key=lambda kv: -abs(kv[1]))
+        s = "  ".join(f"{n}={v:+.3f}" for n, v in top if abs(v) > thresh)
+        lines.append(f"  {ch:8s}  {s or '(all ~0)'}")
+    return "\n".join(lines)

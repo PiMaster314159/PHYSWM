@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import config as C
-from models.components import state_to_target, pearson_per_dim
+from models.components import state_to_target, pearson_per_dim, format_residual
 from models.dataset import make_dataloaders
 from eval import metrics
 
@@ -106,6 +106,9 @@ def evaluate(model, a, data_path, report_dir):
     with open(report_dir / "actuator_recovery.csv", "w", newline="") as _fc:
         _w = csv.writer(_fc); _w.writerow(["true_gain", "learned_a_v", "a_omega"])
         _w.writerow([f"{true_gain:.4f}", f"{learned_av:.4f}", f"{model.log_a_omega.exp().item():.4f}"])
+
+    if getattr(model, "residual", None) is not None:   # structured residual -> print the recovered law
+        print("\n" + format_residual(model.residual))
 
     if need_state:   # anchored: the latent IS pose, so read it straight off (camera-only, no probe)
         dm = direct_readout(Z_va, S_va)
