@@ -38,7 +38,7 @@ from config import (
 )
 
 from models.base import WorldModel
-from models.components import sigreg_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder, img_loss
+from models.components import sigreg_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder, img_loss, StructuredResidual
 
 
 # ## Encoder with a split head
@@ -104,6 +104,7 @@ class GroundedPredictor(nn.Module):
         lock_block: bool = True,
         block_budget: float = 0.0,
         learn_coeffs: bool = False,
+        residual_mode: str = "none",
     ):
         super().__init__()
         self.block_dim    = block_dim
@@ -123,13 +124,19 @@ class GroundedPredictor(nn.Module):
             self.register_buffer("log_a_v", torch.zeros(()), persistent=False)
         self.register_buffer("log_a_omega", torch.zeros(()), persistent=False)
         self.net = mlp([latent_dim + action_dim, hidden, hidden, latent_dim])
+        # higher-order gray-box residual on the block; coefficients read from the FREE latent
+        # (per-context c_k(free)). Toggle with residual_mode.
+        self.residual = (StructuredResidual(dt, budget=(block_budget or 0.1), free_dim=latent_dim - block_dim)
+                         if residual_mode == "basis" else None)
 
     def forward(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         K          = self.block_dim
         learned    = self.net(torch.cat([z, action], dim=-1))
         block_pred = unicycle_step(z[:, :K], action, self.dt,
                                    self.log_a_v.exp(), self.log_a_omega.exp())
-        if not self.lock_block and self.block_budget > 0:
+        if self.residual is not None:                 # structured physics-basis correction on the block
+            block_pred = block_pred + self.residual(z[:, :K], action, free=z[:, K:])
+        elif not self.lock_block and self.block_budget > 0:
             block_pred = block_pred + self.block_budget * torch.tanh(learned[:, :K])
         free_pred  = z[:, K:] + learned[:, K:]        # residual on the free dims
         return torch.cat([block_pred, free_pred], dim=1)
@@ -154,6 +161,7 @@ class GroundedJEPA(WorldModel):
         block_budget: float = 0.0,
         use_decoder: bool = False,
         learn_coeffs: bool = False,
+        residual_mode: str = "none",
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -161,7 +169,7 @@ class GroundedJEPA(WorldModel):
         self.encoder = GroundedEncoder(grid_size, latent_dim, block_dim, channels=encoder_channels)
         self.predictor = GroundedPredictor(
             latent_dim, block_dim, ACTION_DIM, predictor_hidden, dt, lock_block, block_budget,
-            learn_coeffs=learn_coeffs,
+            learn_coeffs=learn_coeffs, residual_mode=residual_mode,
         )
         self.decoder = MLPDecoder(block_dim, grid_size) if use_decoder else None
 
@@ -198,6 +206,9 @@ class GroundedJEPA(WorldModel):
             recon = img_loss(out["recon"], batch["frame"], weights.get("fg_weight", 0.0))
             total = total + weights["recon"] * recon
             parts["recon"] = recon.item()
+        if self.predictor.residual is not None and weights.get("l1", 0.0) > 0:   # sparsify basis coeffs
+            l1 = self.predictor.residual.l1()
+            total = total + weights["l1"] * l1; parts["l1"] = l1.item()
         return total, parts
 
 

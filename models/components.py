@@ -144,3 +144,53 @@ class MLPDecoder(nn.Module):
     def forward(self, v):
         g = self.grid_size
         return self.net(v).view(-1, 1, g, g)
+
+
+class StructuredResidual(nn.Module):
+    """Body-frame physics-basis residual for the gray-box dynamics: captures higher-order effects
+    we don't fully know (drag ~ v^2, slip ~ v*w, understeer ~ w^2) as a BOUNDED, SPARSE combination
+    of physical monomials, ADDED to the exact-kinematics next pose [x, y, cosθ, sinθ].
+
+    Basis Phi(v, w) = [1, v, w, v^2, v*w, w^2]  (degree 2; degree 3 adds the four cubics).
+    Coefficients are global learnable scalars by default; if free_dim > 0 they are read from the free
+    latent (per-context c_k(free)). The constant term Phi_0=1 covers a steady offset, so no separate
+    'latents-only' residual is needed. Zero-init so the residual starts as identity. .l1() regularizes
+    the coefficients for readable, sparse terms. Output is bounded by budget*tanh so it patches the
+    gap without swallowing the known kinematics or running away.
+    """
+    def __init__(self, dt, budget=0.1, free_dim=0, degree=2):
+        super().__init__()
+        self.dt, self.budget, self.free_dim, self.degree = dt, budget, free_dim, degree
+        self.n_basis = 6 if degree < 3 else 10
+        if free_dim > 0:
+            self.coef_head = nn.Linear(free_dim, 3 * self.n_basis)   # 3 body channels x n_basis
+            nn.init.zeros_(self.coef_head.weight); nn.init.zeros_(self.coef_head.bias)
+        else:
+            self.coef = nn.Parameter(torch.zeros(3, self.n_basis))
+
+    def _basis(self, v, w):
+        terms = [torch.ones_like(v), v, w, v * v, v * w, w * w]
+        if self.degree >= 3:
+            terms += [v * v * v, v * v * w, v * w * w, w * w * w]
+        return torch.cat(terms, dim=-1)                     # (B, n_basis)
+
+    def forward(self, pose, action, free=None):
+        v, w = action[:, 0:1], action[:, 1:2]
+        Phi = self._basis(v, w)
+        if self.free_dim > 0:
+            c = self.coef_head(free).view(-1, 3, self.n_basis)
+            raw = (c * Phi.unsqueeze(1)).sum(-1)            # (B, 3)  latent-modulated
+        else:
+            raw = Phi @ self.coef.t()                       # (B, 3)  global
+        d = self.budget * torch.tanh(raw)                   # (B, 3): d_forward, d_lateral, d_omega
+        cos, sin = pose[:, 2:3], pose[:, 3:4]
+        d_fwd, d_lat, d_om = d[:, 0:1], d[:, 1:2], d[:, 2:3]
+        dx = d_fwd * cos - d_lat * sin                      # body frame -> world by heading
+        dy = d_fwd * sin + d_lat * cos
+        dcos = -sin * d_om * self.dt                        # 1st-order heading rotation
+        dsin =  cos * d_om * self.dt
+        return torch.cat([dx, dy, dcos, dsin], dim=1)       # (B, 4) correction to add to next pose
+
+    def l1(self):
+        w = self.coef_head.weight if self.free_dim > 0 else self.coef
+        return w.abs().mean()

@@ -30,7 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.base import WorldModel
-from models.components import img_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder
+from models.components import img_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder, StructuredResidual
 
 from config import GRID_SIZE, ENCODER_CHANNELS, IN_CHANNELS, ACTION_DIM, DT
 
@@ -103,7 +103,7 @@ class EgoWorldModel(WorldModel):
     def __init__(self, grid_size: int = GRID_SIZE, dt: float = DT,
                  channels: tuple = ENCODER_CHANNELS, in_channels: int = IN_CHANNELS,
                  renderer_hidden: int = 512, residual_budget: float = 0.0,
-                 learn_coeffs: bool = False, decoder: str = "mlp"):
+                 residual_mode: str = "none", learn_coeffs: bool = False, decoder: str = "mlp"):
         super().__init__()
         self.dt = dt
         self.residual_budget = residual_budget
@@ -126,8 +126,10 @@ class EgoWorldModel(WorldModel):
         else:
             self.register_buffer("log_a_v",     torch.zeros(()))
             self.register_buffer("log_a_omega", torch.zeros(()))
-        if residual_budget > 0:
-            self.residual = mlp([STATE_DIM + ACTION_DIM, 64, STATE_DIM])
+        # higher-order gray-box residual over a physics basis (drag ~v^2, slip ~v*w); toggle with
+        # residual_mode. Ego has no free latent, so its coefficients are global scalars.
+        self.residual = (StructuredResidual(dt, budget=(residual_budget or 0.1), free_dim=0)
+                         if residual_mode == "basis" else None)
 
     def encode(self, frame: torch.Tensor) -> torch.Tensor:
         return self.encoder(frame)
@@ -137,8 +139,8 @@ class EgoWorldModel(WorldModel):
 
     def predict(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         nxt = unicycle_step(s, action, self.dt, self.log_a_v.exp(), self.log_a_omega.exp())
-        if self.residual_budget > 0:
-            nxt = nxt + self.residual_budget * torch.tanh(self.residual(torch.cat([s, action], dim=-1)))
+        if self.residual is not None:                       # structured physics-basis correction
+            nxt = nxt + self.residual(s, action)
         return nxt
     step = predict   # alias: the state IS pose, so "step" and "predict" are the same call
 
@@ -162,6 +164,9 @@ class EgoWorldModel(WorldModel):
         total = (weights.get("recon", 1.0) * recon + weights.get("dyn", 1.0) * dyn
                  + weights.get("pred", 1.0) * pred + weights.get("var", 0.0) * var)
         parts = {"recon": recon.item(), "dyn": dyn.item(), "pred_recon": pred.item(), "var": var.item()}
+        if self.residual is not None and weights.get("l1", 0.0) > 0:   # sparsify the physics-basis coeffs
+            l1 = self.residual.l1()
+            total = total + weights["l1"] * l1; parts["l1"] = l1.item()
         return total, parts
 
 

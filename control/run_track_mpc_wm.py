@@ -78,11 +78,11 @@ def build_neural(name, a):
 
     if name == "ego":
         from models.state_ae import EgoWorldModel
-        model = EgoWorldModel(grid_size=g, dt=a.dt, learn_coeffs=True, decoder="mlp")
+        model = EgoWorldModel(grid_size=g, dt=a.dt, learn_coeffs=True, decoder="mlp", residual_mode=a.residual)
         physical = True; latent_dim = 4; label = "ego (gray-box)"
     elif name == "grounded":
         from models.grounded import GroundedJEPA
-        model = GroundedJEPA(grid_size=g, latent_dim=C.LATENT_DIM, block_dim=4, dt=a.dt, learn_coeffs=True)
+        model = GroundedJEPA(grid_size=g, latent_dim=C.LATENT_DIM, block_dim=4, dt=a.dt, learn_coeffs=True, residual_mode=a.residual)
         physical = True; latent_dim = C.LATENT_DIM; label = "grounded"
     elif name == "jepa":
         from models.jepa import JEPA
@@ -290,6 +290,8 @@ def parse_args():
     p.add_argument("--drag-c", type=float, default=0.0,
                    help="unmodeled v^2 drag at CONTROL time: truth moves at gain*v - drag_c*v^2. " \
                    "Set to the dataset's drag_c so the test matches training")
+    p.add_argument("--residual", default="none", choices=["none", "basis"],
+                   help="gray-box residual mode for ego/grounded; MUST match how the checkpoint was trained")
     p.add_argument("--track-width", type=float, default=0.4, help="track width (|y - y_c| <= W/2)")
     p.add_argument("--x0", type=float, default=0.15); p.add_argument("--y0", type=float, default=0.0,
                    help="initial lateral offset from centerline")

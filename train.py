@@ -82,6 +82,9 @@ def parse_args():
     p.add_argument("--pred-block-weight", type=float, default=C.PRED_BLOCK_WEIGHT, help="grounded: weight on block dims in the prediction loss")
     # ego + grounded
     p.add_argument("--learn-coeffs", action="store_true", help="learn gray-box a_v/a_omega (ego + grounded); default frozen at 1")
+    p.add_argument("--residual", default="none", choices=["none", "basis"],
+                   help="gray-box higher-order residual (ego + grounded): 'basis' = structured physics-basis g (drag ~v^2); 'none' = off")
+    p.add_argument("--lam-l1", type=float, default=0.001, help="L1 weight on the residual-basis coefficients (sparsity/interpretability)")
     return p.parse_args()
 
 
@@ -94,9 +97,9 @@ def build_model(a):
         return m
     if a.model == "ego":
         return EgoWorldModel(grid_size=a.grid_size, dt=dt, residual_budget=a.residual_budget,
-                             learn_coeffs=a.learn_coeffs, decoder=a.decoder)
+                             residual_mode=a.residual, learn_coeffs=a.learn_coeffs, decoder=a.decoder)
     return GroundedJEPA(grid_size=a.grid_size, latent_dim=a.latent_dim, block_dim=a.block_dim, dt=dt,
-                        lock_block=a.lock_block, block_budget=a.block_budget,
+                        lock_block=a.lock_block, block_budget=a.block_budget, residual_mode=a.residual,
                         use_decoder=(a.use_decoder or a.lam_recon > 0), learn_coeffs=a.learn_coeffs)
 
 
@@ -109,6 +112,8 @@ def build_weights(a):
                  fg_weight=a.recon_fg_weight, recon=a.lam_recon)
     else:  # grounded
         w.update(sigreg=a.lam, recon=a.lam_recon, fg_weight=a.recon_fg_weight, pred_block_weight=a.pred_block_weight)
+    if a.residual == "basis":
+        w["l1"] = a.lam_l1                 # sparsify the physics-basis residual coefficients
     return w
 
 
