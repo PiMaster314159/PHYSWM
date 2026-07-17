@@ -168,7 +168,7 @@ def roll_episode(built, a, y_c, half):
                              n_samples=a.samples, sigma=a.sigma, lam=a.lam,
                              a_low=a_low, a_high=a_high, rng=rng)
         omega = float(a_nom[0, 0])
-        true = true_step(true, np.array([a.v, omega]), a.dt)   # apply first action to TRUTH
+        true = true_step(true, np.array([a.actuator_gain * a.v, omega]), a.dt)   # actuator gain on speed only (truth)
         traj.append(true.copy())
         a_nom = np.roll(a_nom, -1, axis=0); a_nom[-1] = 0.0
 
@@ -282,6 +282,10 @@ def parse_args():
                    help="dataset whose pose stats de-standardize the JEPA readout (match its training data)")
     p.add_argument("--dt", type=float, default=C.DT)
     p.add_argument("--v", type=float, default=0.4, help="fixed forward speed (world [0,1] units)")
+    p.add_argument("--actuator-gain", type=float, default=1.0,
+                   help="unmodeled actuator efficiency at CONTROL time: truth moves at gain*v. " \
+                   "Set to the dataset's gain (e.g. 0.7) so the test matches training; the naive oracle " \
+                   "assumes 1 and mis-plans")
     p.add_argument("--track-width", type=float, default=0.4, help="track width (|y - y_c| <= W/2)")
     p.add_argument("--x0", type=float, default=0.15); p.add_argument("--y0", type=float, default=0.0,
                    help="initial lateral offset from centerline")

@@ -1,0 +1,27 @@
+{
+  "model": "ego",
+  "run": "64x64_actuator",
+  "tag": "s1_e20_v1_fg5_anc1_ancp1_learn_mlpdec",
+  "pose": {
+    "theta_mae_deg": 1.5072393417358398,
+    "theta_flip_pct": 0.0,
+    "x_r2": 0.9947423934936523,
+    "y_r2": 0.9909999370574951,
+    "pos_rmse": 0.027046089991927147
+  },
+  "coeffs": {
+    "a_v": 0.7279061675071716,
+    "a_omega": 0.9813122749328613
+  },
+  "dynamics": {
+    "pred_pos_err": 0.020322430833136423,
+    "pred_theta_mae_deg": 1.5084203195748884
+  },
+  "mpc": {
+    "final_lat": 0.029719189580217242,
+    "final_head_deg": 3.2487879207568797,
+    "max_excursion": 0.05726049498860408,
+    "rms_lat": 0.04286778006255736,
+    "in_bounds": true
+  }
+}
