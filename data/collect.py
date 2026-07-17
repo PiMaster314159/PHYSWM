@@ -166,6 +166,7 @@ def run_episode(
     marker: str = RENDER_MARKER,
     nose_radius: float = NOSE_RADIUS,
     actuator_gain: float = 1.0,
+    drag_c: float = 0.0,
 ) -> tuple:
     """Run one random-action episode.
 
@@ -232,11 +233,13 @@ def run_episode(
         actions.append(action)              # store the COMMANDED action (what we think we sent)
         steps_held += 1
 
-        # actuator resistance: the sim applies a scaled speed (actuator_gain * v). The
-        # stored action keeps the full commanded v, so the model sees the command and must
-        # recover the gain. gain=1.0 leaves env_step's input byte-identical to before.
+        # Non-ideal actuation applied to the TRUTH; the stored action keeps the full commanded v,
+        # so the model sees the command and must recover the effect.
+        #   actuator_gain: constant efficiency (applied = gain * v)   -> a constant a_v recovers it
+        #   drag_c:        aerodynamic drag, a v^2 speed loss          -> needs a v^2 residual term
+        # gain=1, drag_c=0 leaves env_step's input byte-identical to before.
         applied = action.copy()
-        applied[0] = action[0] * actuator_gain
+        applied[0] = max(0.0, action[0] * actuator_gain - drag_c * action[0] ** 2)
         next_state, done = env_step(state, applied, dt=dt, world_bounds=world_bounds)
         if done:
             termination = "wall"
@@ -319,6 +322,7 @@ def collect_dataset(
     nose_radius: float = NOSE_RADIUS,
     actuator_gain: float = ACTUATOR_GAIN,
     gain_range: tuple = None,
+    drag_c: float = 0.0,
     progress_every: int = 100,
 ) -> None:
     """Stream `n_episodes` random-action episodes to an HDF5 file.
@@ -404,7 +408,7 @@ def collect_dataset(
                 v_mean=v_mean, v_std=v_std,
                 omega_mean=omega_mean, omega_std=omega_std,
                 marker=marker, nose_radius=nose_radius,
-                actuator_gain=ep_gain,
+                actuator_gain=ep_gain, drag_c=drag_c,
             )
             if len(states) < min_length:
                 continue
@@ -440,6 +444,7 @@ def collect_dataset(
         f.attrs["render_marker"] = marker
         f.attrs["nose_radius"] = nose_radius
         f.attrs["actuator_gain"] = actuator_gain   # truth for the gray-box test: model's a_v should recover this
+        f.attrs["drag_c"] = drag_c                  # aerodynamic drag coefficient (applied v -= drag_c * v^2)
         # per-episode gain range (the hidden parameter the model must infer); equal bounds = fixed gain
         f.attrs["gain_lo"] = float(gain_range[0]) if gain_range is not None else actuator_gain
         f.attrs["gain_hi"] = float(gain_range[1]) if gain_range is not None else actuator_gain

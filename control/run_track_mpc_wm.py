@@ -168,7 +168,8 @@ def roll_episode(built, a, y_c, half):
                              n_samples=a.samples, sigma=a.sigma, lam=a.lam,
                              a_low=a_low, a_high=a_high, rng=rng)
         omega = float(a_nom[0, 0])
-        true = true_step(true, np.array([a.actuator_gain * a.v, omega]), a.dt)   # actuator gain on speed only (truth)
+        v_true = max(0.0, a.actuator_gain * a.v - a.drag_c * a.v ** 2)           # non-ideal speed at CONTROL time
+        true = true_step(true, np.array([v_true, omega]), a.dt)                   # actuator gain + v^2 drag (truth only)
         traj.append(true.copy())
         a_nom = np.roll(a_nom, -1, axis=0); a_nom[-1] = 0.0
 
@@ -286,6 +287,9 @@ def parse_args():
                    help="unmodeled actuator efficiency at CONTROL time: truth moves at gain*v. " \
                    "Set to the dataset's gain (e.g. 0.7) so the test matches training; the naive oracle " \
                    "assumes 1 and mis-plans")
+    p.add_argument("--drag-c", type=float, default=0.0,
+                   help="unmodeled v^2 drag at CONTROL time: truth moves at gain*v - drag_c*v^2. " \
+                   "Set to the dataset's drag_c so the test matches training")
     p.add_argument("--track-width", type=float, default=0.4, help="track width (|y - y_c| <= W/2)")
     p.add_argument("--x0", type=float, default=0.15); p.add_argument("--y0", type=float, default=0.0,
                    help="initial lateral offset from centerline")
