@@ -18,10 +18,12 @@
     "pred_theta_mae_deg": 1.611398750685571
   },
   "mpc": {
-    "final_lat": 0.03611916247242242,
-    "final_head_deg": 2.626411734595867,
-    "max_excursion": 0.05008094100540672,
-    "rms_lat": 0.04081319990688341,
-    "in_bounds": true
+    "final_lat": 0.03537153461912457,
+    "final_head_deg": 3.4542994812835857,
+    "max_excursion": 0.04526448812843109,
+    "rms_lat": 0.0375971665647747,
+    "in_bounds": true,
+    "mean_speed": 0.19995520569732614,
+    "speed_err": 4.4794302673872854e-05
   }
 }
