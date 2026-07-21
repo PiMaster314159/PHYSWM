@@ -48,7 +48,7 @@ def wrap(a):                              # wrap angle to [-pi, pi]
 # ---- cost: stay on centerline, face down-track, gentle steering, soft track bound ----
 def make_costs(W, w_lat, w_head, w_ctrl, w_bound, term_scale):
     half = W / 2.0
-    def running(S, A):
+    def running(S, A, S_next=None):
         y, th, omega = S[:, 1], S[:, 2], A[:, 0]
         viol = np.maximum(0.0, np.abs(y) - half)
         return (w_lat * y**2 + w_head * wrap(th)**2 + w_ctrl * omega**2

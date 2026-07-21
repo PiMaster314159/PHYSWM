@@ -17,7 +17,7 @@ def mppi_plan(s0, a_nom, dynamics, running_cost, terminal_cost=None,
     s0           : (d,)      current state
     a_nom        : (H, m)    nominal action sequence (warm start)
     dynamics     : (K,d),(K,m) -> (K,d)     one vectorized step
-    running_cost : (K,d),(K,m) -> (K,)      per-step cost
+    running_cost : (K,d),(K,m),(K,d) -> (K,)  per-step cost (gets S, action, and predicted S_next)
     terminal_cost: (K,d) -> (K,)            optional cost on the final state
     returns (a_new (H,m), info dict)
     """
@@ -33,8 +33,9 @@ def mppi_plan(s0, a_nom, dynamics, running_cost, terminal_cost=None,
     S = np.tile(np.asarray(s0, float), (K, 1))             # (K, d)
     J = np.zeros(K)
     for t in range(H):
-        J += running_cost(S, A[:, t])
-        S = dynamics(S, A[:, t])
+        S_next = dynamics(S, A[:, t])
+        J += running_cost(S, A[:, t], S_next)              # S_next lets costs price predicted motion (e.g. ground speed)
+        S = S_next
     if terminal_cost is not None:
         J += terminal_cost(S)
 

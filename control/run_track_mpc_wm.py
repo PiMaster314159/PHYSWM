@@ -62,8 +62,10 @@ def build_unicycle(a):
         return np.asarray(true_state, float).copy()
     def dynamics(S, A):
         x, y, th = S[:, 0], S[:, 1], S[:, 2]
-        th2 = th + A[:, 0] * dt
-        return np.stack([x + v * np.cos(th2) * dt, y + v * np.sin(th2) * dt, th2], axis=1)
+        vv = A[:, 0] if a.plan_speed else v        # 2-D action carries v; else fixed (naive: NO drag model)
+        om = A[:, -1]
+        th2 = th + om * dt
+        return np.stack([x + vv * np.cos(th2) * dt, y + vv * np.sin(th2) * dt, th2], axis=1)
     def pose(S):
         return S[:, :3].copy()
     return observe, dynamics, pose, 3, "unicycle (oracle)"
@@ -108,8 +110,10 @@ def build_neural(name, a):
     def to_frame(frame):
         return torch.from_numpy(np.asarray(frame, np.float32)).view(1, 1, g, g).to(dev)
 
-    def full_action(A):                               # (K,1)=omega -> (K,2)=[v,omega] torch
-        K = A.shape[0]
+    def full_action(A):                               # -> (K,2)=[v,omega] torch
+        if a.plan_speed:                              # A is already (K,2)=[v,omega]
+            return torch.from_numpy(A.astype(np.float32)).to(dev)
+        K = A.shape[0]                                # A is (K,1)=omega; prepend the fixed speed
         vv = torch.full((K, 1), float(v))
         om = torch.from_numpy(A.astype(np.float32))
         return torch.cat([vv, om], dim=1).to(dev)
@@ -138,9 +142,16 @@ def make_costs(pose_fn, y_c, half, a):
             return np.where(np.abs(lat) > half, 1e6, 0.0)
         viol = np.maximum(0.0, np.abs(lat) - half)      # SOFT: quadratic penalty past the edge
         return a.w_bound * viol**2
-    def running(S, A):
-        P = pose_fn(S); lat = P[:, 1] - y_c; head = wrap(P[:, 2]); om = A[:, 0]
-        return a.w_lat*lat**2 + a.w_head*head**2 + a.w_ctrl*om**2 + bound_cost(lat)
+    def running(S, A, S_next=None):
+        P = pose_fn(S); lat = P[:, 1] - y_c; head = wrap(P[:, 2]); om = A[:, -1]
+        cost = a.w_lat*lat**2 + a.w_head*head**2 + a.w_ctrl*om**2 + bound_cost(lat)
+        if a.plan_speed and S_next is not None:
+            # track a reference GROUND speed. ds is the model's PREDICTED world displacement, so a
+            # drag-aware model (ego gray-box) knows command v -> slower ground speed and picks the
+            # right v; a naive model (no drag) commands v=v_ref and the true car then falls short.
+            ds = np.sqrt(((S_next[:, :2] - S[:, :2]) ** 2).sum(1))
+            cost = cost + a.w_speed * (ds / a.dt - a.v_ref) ** 2
+        return cost
     def terminal(S):
         P = pose_fn(S); lat = P[:, 1] - y_c; head = wrap(P[:, 2])
         return a.term_scale*(a.w_lat*lat**2 + a.w_head*head**2) + bound_cost(lat)
@@ -156,22 +167,32 @@ def roll_episode(built, a, y_c, half):
     observe, dynamics, pose, label = built
     running, terminal = make_costs(pose, y_c, half, a)
     rng = np.random.default_rng(a.seed)
-    a_low = np.array([-a.omega_max]); a_high = np.array([a.omega_max])
+    if a.plan_speed:                                   # 2-D action [v, omega]: MPPI also plans speed
+        a_low = np.array([a.v_min, -a.omega_max]); a_high = np.array([a.v_max, a.omega_max])
+        sigma = np.array([a.sigma_v, a.sigma]); m = 2
+    else:                                              # 1-D action [omega]: speed fixed at a.v
+        a_low = np.array([-a.omega_max]); a_high = np.array([a.omega_max])
+        sigma = a.sigma; m = 1
 
     true = np.array([a.x0, y_c + a.y0, np.deg2rad(a.theta0_deg)], float)   # TRUE state (world [0,1])
-    a_nom = np.zeros((a.horizon, 1))
+    a_nom = np.zeros((a.horizon, m))
+    if a.plan_speed:
+        a_nom[:, 0] = a.v_ref                          # warm-start the speed channel at the reference (not 0)
     traj = [true.copy()]
     for _ in range(a.steps):
         frame = render_frame(true, grid_size=a.grid_size, marker=a.marker)
         s0 = observe(true, frame)                      # model's estimate of the current state
         a_nom, _ = mppi_plan(s0, a_nom, dynamics, running, terminal,
-                             n_samples=a.samples, sigma=a.sigma, lam=a.lam,
+                             n_samples=a.samples, sigma=sigma, lam=a.lam,
                              a_low=a_low, a_high=a_high, rng=rng)
-        omega = float(a_nom[0, 0])
-        v_true = max(0.0, a.actuator_gain * a.v - a.drag_c * a.v ** 2)           # non-ideal speed at CONTROL time
+        v_cmd = float(a_nom[0, 0]) if a.plan_speed else a.v
+        omega = float(a_nom[0, -1])
+        v_true = max(0.0, a.actuator_gain * v_cmd - a.drag_c * v_cmd ** 2)        # non-ideal speed at CONTROL time
         true = true_step(true, np.array([v_true, omega]), a.dt)                   # actuator gain + v^2 drag (truth only)
         traj.append(true.copy())
         a_nom = np.roll(a_nom, -1, axis=0); a_nom[-1] = 0.0
+        if a.plan_speed:
+            a_nom[-1, 0] = a.v_ref                     # keep cruising; don't let planned speed decay to 0
 
     traj = np.array(traj)
     y_err = traj[:, 1] - y_c
@@ -181,6 +202,11 @@ def roll_episode(built, a, y_c, half):
                "max_excursion": np.abs(y_err).max(),
                "in_bounds": bool(np.abs(y_err).max() <= half + 1e-6),
                "rms_lat": float(np.sqrt((y_err**2).mean()))}
+    if a.plan_speed:                                   # achieved GROUND speed vs reference (the drag-relevant metric)
+        step_d = np.sqrt((np.diff(traj[:, :2], axis=0) ** 2).sum(1))
+        mean_speed = float(step_d.mean() / a.dt)
+        metrics["mean_speed"] = mean_speed
+        metrics["speed_err"] = float(abs(mean_speed - a.v_ref))
     return traj, metrics
 
 
@@ -293,6 +319,18 @@ def parse_args():
     p.add_argument("--drag-c", type=float, default=0.0,
                    help="unmodeled v^2 drag at CONTROL time: truth moves at gain*v - drag_c*v^2. " \
                    "Set to the dataset's drag_c so the test matches training")
+    p.add_argument("--plan-speed", action="store_true",
+                   help="2-D action: MPPI plans forward speed v too (not just omega), tracking a reference "
+                        "GROUND speed --v-ref. This is what makes v^2 drag control-relevant: a drag-aware model "
+                        "commands the right v, a naive one commands v=v_ref and the true car falls short. At fixed "
+                        "v (default) drag is just a constant offset and re-planning absorbs it.")
+    p.add_argument("--v-ref", type=float, default=0.20,
+                   help="target ground speed for --plan-speed (must be below the drag curve's peak "
+                        "gain^2/(4*drag_c); e.g. 0.25 at gain 1, drag_c 1)")
+    p.add_argument("--v-min", type=float, default=0.05, help="min planned speed (--plan-speed)")
+    p.add_argument("--v-max", type=float, default=0.6, help="max planned speed (--plan-speed)")
+    p.add_argument("--sigma-v", type=float, default=0.15, help="MPPI exploration std on the speed action")
+    p.add_argument("--w-speed", type=float, default=8.0, help="weight on ground-speed tracking (--plan-speed)")
     p.add_argument("--residual", default="none", choices=["none", "basis"],
                    help="gray-box residual mode for ego/grounded; MUST match how the checkpoint was trained")
     p.add_argument("--track-width", type=float, default=0.4, help="track width (|y - y_c| <= W/2)")
@@ -344,15 +382,18 @@ def main():
     for name in models:
         traj, mt = run_one(name, a, y_c, half)
         results.append((mt["model"], traj, mt))
+        speed_str = f"  mean_v {mt['mean_speed']:.3f} (ref {a.v_ref:.2f}, err {mt['speed_err']:.3f})" if a.plan_speed else ""
         print(f"  {mt['model']:22s}  final_lat {mt['final_lat']:.3f}  "
               f"final_head {mt['final_head_deg']:5.1f} deg  max|y| {mt['max_excursion']:.3f}  "
-              f"rms_lat {mt['rms_lat']:.3f}  {'IN' if mt['in_bounds'] else 'OUT of'} bounds")
+              f"rms_lat {mt['rms_lat']:.3f}  {'IN' if mt['in_bounds'] else 'OUT of'} bounds{speed_str}")
         if name != "unicycle":                      # merge control result into the run's metrics.json
             ck = Path(a.ckpt_for(name))
             if len(ck.parts) >= 4 and ck.parent.parent.parent.name == "checkpoints":   # checkpoints/<run>/<model>/<tag>.pt
                 from eval.metrics import update_mpc
                 rep = C.RESULTS_DIR / ck.parent.parent.name / ck.parent.name / ck.stem
-                update_mpc(rep, {k: mt[k] for k in ("final_lat", "final_head_deg", "max_excursion", "rms_lat", "in_bounds")})
+                keys = ["final_lat", "final_head_deg", "max_excursion", "rms_lat", "in_bounds"]
+                if a.plan_speed: keys += ["mean_speed", "speed_err"]
+                update_mpc(rep, {k: mt[k] for k in keys})
 
     # overlay figure -> results/track_mpc/<name>/ when --name is given (else the shared, overwritten files)
     report = ROOT / "results" / "track_mpc"
@@ -375,11 +416,14 @@ def main():
     print(f"wrote {out}")
 
     import csv as _csv                              # cross-model control summary (one row per model)
+    speed_cols = ["mean_speed", "speed_err"] if a.plan_speed else []
     with open(report / "mpc_summary.csv", "w", newline="") as f:
-        w = _csv.writer(f); w.writerow(["model", "final_lat", "final_head_deg", "max_excursion", "rms_lat", "in_bounds"])
+        w = _csv.writer(f)
+        w.writerow(["model", "final_lat", "final_head_deg", "max_excursion", "rms_lat", "in_bounds"] + speed_cols)
         for label, _traj, mt in results:
-            w.writerow([label, f"{mt['final_lat']:.4f}", f"{mt['final_head_deg']:.4f}",
-                        f"{mt['max_excursion']:.4f}", f"{mt['rms_lat']:.4f}", int(mt["in_bounds"])])
+            row = [label, f"{mt['final_lat']:.4f}", f"{mt['final_head_deg']:.4f}",
+                   f"{mt['max_excursion']:.4f}", f"{mt['rms_lat']:.4f}", int(mt["in_bounds"])]
+            w.writerow(row + [f"{mt[c]:.4f}" for c in speed_cols])
     print(f"wrote {report / 'mpc_summary.csv'}")
 
     for label, traj, mt in results:      # per-rollout coords: t, x, y, heading, lateral/heading error
