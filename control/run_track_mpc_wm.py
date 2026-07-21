@@ -228,7 +228,10 @@ def run_sweep(a, y_c, models):
     vals = [float(x) for x in a.sweep_values.split(",") if x.strip()]
     axis = {"theta": "theta0_deg", "width": "track_width", "wlat": "w_lat"}[a.sweep]
     built = {name: build_one(name, a) for name in models}
-    report = ROOT / "results" / "track_mpc"; report.mkdir(parents=True, exist_ok=True)
+    report = ROOT / "results" / "track_mpc"
+    if a.name:
+        report = report / a.name
+    report.mkdir(parents=True, exist_ok=True)
     traj_dir = report / f"sweep_{a.sweep}_traj"; traj_dir.mkdir(exist_ok=True)   # per-rollout coords + overlays
     print(f"=== MPC sweep: {a.sweep} = {vals} ===")
     rows = []
@@ -351,8 +354,11 @@ def main():
                 rep = C.RESULTS_DIR / ck.parent.parent.name / ck.parent.name / ck.stem
                 update_mpc(rep, {k: mt[k] for k in ("final_lat", "final_head_deg", "max_excursion", "rms_lat", "in_bounds")})
 
-    # overlay figure
-    report = ROOT / "results" / "track_mpc"; report.mkdir(parents=True, exist_ok=True)
+    # overlay figure -> results/track_mpc/<name>/ when --name is given (else the shared, overwritten files)
+    report = ROOT / "results" / "track_mpc"
+    if a.name:
+        report = report / a.name
+    report.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.axhspan(y_c - half, y_c + half, color="0.92", label="track")
     ax.axhline(y_c, color="0.6", ls="--", lw=1)
