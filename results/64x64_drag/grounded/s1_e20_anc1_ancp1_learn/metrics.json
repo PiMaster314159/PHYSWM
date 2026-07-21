@@ -1,0 +1,23 @@
+{
+  "model": "grounded",
+  "run": "64x64_drag",
+  "tag": "s1_e20_anc1_ancp1_learn",
+  "pose": {
+    "theta_mae_deg": 2.1775190830230713,
+    "theta_flip_pct": 0.0,
+    "x_r2": 0.9946593046188354,
+    "y_r2": 0.9958468079566956,
+    "pos_rmse": 0.021733811125159264
+  },
+  "coeffs": {
+    "a_v": 1.4425694942474365,
+    "a_omega": 1.0
+  },
+  "mpc": {
+    "final_lat": 0.043869778842968166,
+    "final_head_deg": 1.1341845864625648,
+    "max_excursion": 0.05092595947495171,
+    "rms_lat": 0.043921266383294556,
+    "in_bounds": true
+  }
+}

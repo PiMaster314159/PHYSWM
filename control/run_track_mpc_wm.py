@@ -308,6 +308,8 @@ def parse_args():
     p.add_argument("--sweep", default=None, choices=["theta", "width", "wlat"],
                    help="sweep an axis instead of a single run (start heading / track width / w-lat)")
     p.add_argument("--sweep-values", default="", help="comma list for --sweep, e.g. 30,45,60,75,90")
+    p.add_argument("--name", default=None,
+                   help="label for this run: outputs go to results/track_mpc/<name>/ instead of overwriting the shared files")
     a = p.parse_args()
 
     def ckpt_for(name):

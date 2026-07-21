@@ -1,0 +1,19 @@
+{
+  "model": "jepa",
+  "run": "64x64_drag",
+  "tag": "residual_s1_e20_anc1_ancp1",
+  "pose": {
+    "theta_mae_deg": 2.9604225158691406,
+    "theta_flip_pct": 0.0,
+    "x_r2": 0.9974244236946106,
+    "y_r2": 0.994413435459137,
+    "pos_rmse": 0.02023080736398697
+  },
+  "mpc": {
+    "final_lat": 0.02482736238228911,
+    "final_head_deg": 8.137650700319488,
+    "max_excursion": 0.06048504914309183,
+    "rms_lat": 0.044756730779758155,
+    "in_bounds": true
+  }
+}
