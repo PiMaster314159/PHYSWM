@@ -221,3 +221,40 @@ def format_residual(residual, free=None, thresh=1e-3):
         s = "  ".join(f"{n}={v:+.3f}" for n, v in top if abs(v) > thresh)
         lines.append(f"  {ch:8s}  {s or '(all ~0)'}")
     return "\n".join(lines)
+
+
+class MLPResidual(nn.Module):
+    """Unstructured neural counterpart to StructuredResidual: same role (a bounded pose correction
+    added to the exact-kinematics next pose), but with NO fixed physics basis and NO named terms.
+    A small MLP maps (heading cosθ,sinθ ; action v,ω ; optional free latent) -> bounded Δ[x,y,cosθ,sinθ].
+
+    This is the control condition for the g-ablation. It sees the SAME inputs and has the SAME output
+    scale (budget*tanh) as the structured residual, so the only thing that differs between them is the
+    inductive bias: a fixed monomial basis with sparse, readable coefficients vs. a free-form net.
+    (x, y are deliberately excluded so the correction is translation-invariant, exactly like the
+    structured one.) Zero-init on the last layer -> the residual starts as identity.
+    """
+    def __init__(self, dt, budget=0.1, free_dim=0, hidden=64):
+        super().__init__()
+        self.dt, self.budget, self.free_dim = dt, budget, free_dim
+        self.net = mlp([4 + free_dim, hidden, hidden, 4])          # [cos, sin, v, w] (+ free) -> Δpose
+        nn.init.zeros_(self.net[-1].weight); nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, pose, action, free=None):
+        cos, sin = pose[:, 2:3], pose[:, 3:4]
+        v, w = action[:, 0:1], action[:, 1:2]
+        feats = [cos, sin, v, w] + ([free] if self.free_dim > 0 else [])
+        return self.budget * torch.tanh(self.net(torch.cat(feats, dim=1)))   # (B, 4) bounded correction
+
+    def l1(self):
+        return self.net[0].weight.abs().mean()   # parity with StructuredResidual.l1(): keep the correction small
+
+
+def make_residual(mode, dt, budget, free_dim):
+    """Factory shared by ego + grounded: 'basis' -> StructuredResidual, 'mlp' -> MLPResidual, else None."""
+    b = budget or 0.1
+    if mode == "basis":
+        return StructuredResidual(dt, budget=b, free_dim=free_dim)
+    if mode == "mlp":
+        return MLPResidual(dt, budget=b, free_dim=free_dim)
+    return None

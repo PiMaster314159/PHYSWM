@@ -38,7 +38,7 @@ from config import (
 )
 
 from models.base import WorldModel
-from models.components import sigreg_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder, img_loss, StructuredResidual
+from models.components import sigreg_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder, img_loss, make_residual
 
 
 # ## Encoder with a split head
@@ -124,10 +124,10 @@ class GroundedPredictor(nn.Module):
             self.register_buffer("log_a_v", torch.zeros(()), persistent=False)
         self.register_buffer("log_a_omega", torch.zeros(()), persistent=False)
         self.net = mlp([latent_dim + action_dim, hidden, hidden, latent_dim])
-        # higher-order gray-box residual on the block; coefficients read from the FREE latent
-        # (per-context c_k(free)). Toggle with residual_mode.
-        self.residual = (StructuredResidual(dt, budget=(block_budget or 0.1), free_dim=latent_dim - block_dim)
-                         if residual_mode == "basis" else None)
+        # higher-order gray-box residual on the block, conditioned on the FREE latent. 'basis' builds a
+        # structured physics residual whose per-context coefficients c_k(free) are a linear readout of the
+        # 124 free dims; 'mlp' feeds those same free dims into a free-form net. Toggle with residual_mode.
+        self.residual = make_residual(residual_mode, dt, block_budget, free_dim=latent_dim - block_dim)
 
     def forward(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         K          = self.block_dim

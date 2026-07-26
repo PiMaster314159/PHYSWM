@@ -68,7 +68,7 @@ def evaluate(model, a, data_path, report_dir):
             _w = csv.writer(_fc); _w.writerow(["true_gain", "learned_a_v", "a_omega"])
             _w.writerow([f"{true_gain:.4f}", f"{learned_av:.4f}", f"{model.predictor.log_a_omega.exp().item():.4f}"])
 
-    if model.predictor.residual is not None:   # structured residual: coeffs vary with the free latent
+    if model.predictor.residual is not None and hasattr(model.predictor.residual, "named_coeffs"):  # structured only
         free = Zva[:, a.block_dim:].mean(0, keepdim=True).to(device)
         print("\n" + format_residual(model.predictor.residual, free))
 

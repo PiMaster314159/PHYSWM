@@ -82,9 +82,10 @@ def parse_args():
     p.add_argument("--pred-block-weight", type=float, default=C.PRED_BLOCK_WEIGHT, help="grounded: weight on block dims in the prediction loss")
     # ego + grounded
     p.add_argument("--learn-coeffs", action="store_true", help="learn gray-box a_v/a_omega (ego + grounded); default frozen at 1")
-    p.add_argument("--residual", default="none", choices=["none", "basis"],
-                   help="gray-box higher-order residual (ego + grounded): 'basis' = structured physics-basis g (drag ~v^2); 'none' = off")
-    p.add_argument("--lam-l1", type=float, default=0.001, help="L1 weight on the residual-basis coefficients (sparsity/interpretability)")
+    p.add_argument("--residual", default="none", choices=["none", "basis", "mlp"],
+                   help="gray-box higher-order residual (ego + grounded): 'basis' = structured physics-basis g "
+                        "(drag ~v^2, readable terms); 'mlp' = unstructured free-form net (ablation control); 'none' = off")
+    p.add_argument("--lam-l1", type=float, default=0.001, help="L1 weight keeping the residual small/sparse (basis: readable coeffs; mlp: input weights)")
     return p.parse_args()
 
 
@@ -112,8 +113,8 @@ def build_weights(a):
                  fg_weight=a.recon_fg_weight, recon=a.lam_recon)
     else:  # grounded
         w.update(sigreg=a.lam, recon=a.lam_recon, fg_weight=a.recon_fg_weight, pred_block_weight=a.pred_block_weight)
-    if a.residual == "basis":
-        w["l1"] = a.lam_l1                 # sparsify the physics-basis residual coefficients
+    if a.residual != "none":
+        w["l1"] = a.lam_l1                 # keep the residual small/sparse (basis coeffs or mlp weights)
     return w
 
 
@@ -141,6 +142,7 @@ def build_tag(a):
     if a.lam_anchor > 0:      tag += f"_anc{a.lam_anchor:g}"
     if a.lam_anchor_pred > 0: tag += f"_ancp{a.lam_anchor_pred:g}"
     if a.model in ("ego", "grounded") and a.learn_coeffs: tag += "_learn"
+    if a.model in ("ego", "grounded") and a.residual != "none": tag += f"_g{a.residual}"   # gbasis / gmlp (distinct ablation ckpts)
     if a.model == "ego": tag += "_bc" if a.decoder == "broadcast" else "_mlpdec"   # decoder token last
     if a.note: tag += f"_{a.note}"
     return tag

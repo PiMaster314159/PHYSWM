@@ -331,7 +331,7 @@ def parse_args():
     p.add_argument("--v-max", type=float, default=0.6, help="max planned speed (--plan-speed)")
     p.add_argument("--sigma-v", type=float, default=0.15, help="MPPI exploration std on the speed action")
     p.add_argument("--w-speed", type=float, default=8.0, help="weight on ground-speed tracking (--plan-speed)")
-    p.add_argument("--residual", default="none", choices=["none", "basis"],
+    p.add_argument("--residual", default="none", choices=["none", "basis", "mlp"],
                    help="gray-box residual mode for ego/grounded; MUST match how the checkpoint was trained")
     p.add_argument("--track-width", type=float, default=0.4, help="track width (|y - y_c| <= W/2)")
     p.add_argument("--x0", type=float, default=0.15); p.add_argument("--y0", type=float, default=0.0,

@@ -30,7 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.base import WorldModel
-from models.components import img_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder, StructuredResidual
+from models.components import img_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder, make_residual
 
 from config import GRID_SIZE, ENCODER_CHANNELS, IN_CHANNELS, ACTION_DIM, DT
 
@@ -126,10 +126,9 @@ class EgoWorldModel(WorldModel):
         else:
             self.register_buffer("log_a_v",     torch.zeros(()))
             self.register_buffer("log_a_omega", torch.zeros(()))
-        # higher-order gray-box residual over a physics basis (drag ~v^2, slip ~v*w); toggle with
-        # residual_mode. Ego has no free latent, so its coefficients are global scalars.
-        self.residual = (StructuredResidual(dt, budget=(residual_budget or 0.1), free_dim=0)
-                         if residual_mode == "basis" else None)
+        # higher-order gray-box residual on the dynamics; toggle with residual_mode. Ego has no free
+        # latent, so a 'basis' residual uses global scalar coefficients and an 'mlp' one is unconditioned.
+        self.residual = make_residual(residual_mode, dt, residual_budget, free_dim=0)
 
     def encode(self, frame: torch.Tensor) -> torch.Tensor:
         return self.encoder(frame)
