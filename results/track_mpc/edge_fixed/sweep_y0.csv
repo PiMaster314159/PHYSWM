@@ -1,0 +1,25 @@
+y0,model,final_lat,max_excursion,in_bounds,speed_err
+0.05,unicycle (oracle),0.0682,0.1074,1,nan
+0.05,ego (gray-box),0.0690,0.1109,1,nan
+0.05,grounded,0.0814,0.1244,1,nan
+0.05,residual JEPA (probe),0.0600,0.1134,1,nan
+0.1,unicycle (oracle),0.0922,0.1516,1,nan
+0.1,ego (gray-box),0.0961,0.1584,1,nan
+0.1,grounded,0.1098,0.1745,1,nan
+0.1,residual JEPA (probe),0.1056,0.1688,1,nan
+0.13,unicycle (oracle),0.1054,0.1778,1,nan
+0.13,ego (gray-box),0.1155,0.1870,1,nan
+0.13,grounded,0.1268,0.1923,1,nan
+0.13,residual JEPA (probe),0.1239,0.2005,0,nan
+0.15,unicycle (oracle),0.1115,0.1957,1,nan
+0.15,ego (gray-box),0.1198,0.1995,1,nan
+0.15,grounded,0.1303,0.2132,0,nan
+0.15,residual JEPA (probe),0.3300,0.3825,0,nan
+0.17,unicycle (oracle),0.1168,0.2200,0,nan
+0.17,ego (gray-box),0.1161,0.2163,0,nan
+0.17,grounded,0.1355,0.2401,0,nan
+0.17,residual JEPA (probe),0.5648,0.5648,0,nan
+0.18,unicycle (oracle),0.1195,0.2255,0,nan
+0.18,ego (gray-box),0.1040,0.2135,0,nan
+0.18,grounded,0.1270,0.2294,0,nan
+0.18,residual JEPA (probe),0.3860,0.4233,0,nan
