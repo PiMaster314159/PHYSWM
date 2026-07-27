@@ -1,0 +1,4 @@
+model,final_lat,final_head_deg,max_excursion,rms_lat,in_bounds,mean_speed,speed_err
+unicycle (oracle),0.0303,4.8534,0.0410,0.0337,1,0.1638,0.0362
+ego (gray-box),0.0341,2.4935,0.0453,0.0370,1,0.2032,0.0032
+grounded,0.0381,4.9337,0.0488,0.0407,1,0.2008,0.0008

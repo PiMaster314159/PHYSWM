@@ -1,0 +1,29 @@
+{
+  "model": "ego",
+  "run": "64x64_drag",
+  "tag": "s1_e20_v1_fg5_anc1_ancp1_gmlp_mlpdec",
+  "pose": {
+    "theta_mae_deg": 1.6018191576004028,
+    "theta_flip_pct": 0.0,
+    "x_r2": 0.9942270517349243,
+    "y_r2": 0.9944744110107422,
+    "pos_rmse": 0.02372908778488636
+  },
+  "coeffs": {
+    "a_v": 1.0,
+    "a_omega": 1.0
+  },
+  "dynamics": {
+    "pred_pos_err": 0.017972812534228846,
+    "pred_theta_mae_deg": 1.6101733032129253
+  },
+  "mpc": {
+    "final_lat": 0.0341015462656844,
+    "final_head_deg": 2.4935242090311815,
+    "max_excursion": 0.04533745519239796,
+    "rms_lat": 0.036965197078191174,
+    "in_bounds": true,
+    "mean_speed": 0.20322827731555432,
+    "speed_err": 0.0032282773155543065
+  }
+}

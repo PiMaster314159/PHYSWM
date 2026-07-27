@@ -1,0 +1,7 @@
+model,mode,pose_rmse,speed_err,mean_speed,final_lat,tag
+ego,none,0.0574,0.0338,0.166,0.0358,s1_e20_v1_fg5_anc1_ancp1_mlpdec
+ego,basis,0.0247,0.0012,0.201,0.0338,s1_e20_v1_fg5_anc1_ancp1_gbasis_mlpdec
+ego,mlp,0.0237,0.0032,0.203,0.0341,s1_e20_v1_fg5_anc1_ancp1_gmlp_mlpdec
+grounded,none,0.0253,0.0357,0.164,0.0331,s1_e20_anc1_ancp1
+grounded,basis,0.0194,0.0027,0.197,0.0341,s1_e20_anc1_ancp1_gbasis
+grounded,mlp,0.0225,0.0008,0.201,0.0381,s1_e20_anc1_ancp1_gmlp

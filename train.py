@@ -23,6 +23,7 @@ ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").ex
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import h5py
 import torch
 import torch.nn.functional as F
 torch.set_num_threads(4)
@@ -265,6 +266,12 @@ def main():
     experiment = f"{a.run}/{a.model}/{tag}"
     if not data_path.exists():
         raise SystemExit(f"dataset not found: {data_path} (this runner does not collect; build it first)")
+
+    with h5py.File(data_path, "r") as _f:              # grid is a property of the DATASET, not a CLI choice:
+        ds_grid = int(_f.attrs["grid_size"])           # infer it so a stale/absent --grid-size can't build a mismatched encoder
+    if ds_grid != a.grid_size:
+        print(f"grid_size {a.grid_size} -> {ds_grid}  (inferred from {data_path.name})")
+        a.grid_size = ds_grid
 
     print(f"=== {experiment} ===")
     print(f"device={a.device}  data={data_path.name}  model={a.model}  "
