@@ -179,12 +179,16 @@ def roll_episode(built, a, y_c, half):
     if a.plan_speed:
         a_nom[:, 0] = a.v_ref                          # warm-start the speed channel at the reference (not 0)
     traj = [true.copy()]
+    pred_peak = 0.0                                     # largest |lat| the MODEL ever predicted for a committed plan
     for _ in range(a.steps):
         frame = render_frame(true, grid_size=a.grid_size, marker=a.marker)
         s0 = observe(true, frame)                      # model's estimate of the current state
         a_nom, _ = mppi_plan(s0, a_nom, dynamics, running, terminal,
                              n_samples=a.samples, sigma=sigma, lam=a.lam,
                              a_low=a_low, a_high=a_high, rng=rng)
+        if a.log_pred_excursion:                       # the model's estimate of its OWN current |lat| (localization,
+            model_lat = abs(float(pose(np.asarray(s0, float)[None])[0, 1]) - y_c)   # what the constraint rollout starts from)
+            pred_peak = max(pred_peak, model_lat)
         v_cmd = float(a_nom[0, 0]) if a.plan_speed else a.v
         omega = float(a_nom[0, -1])
         v_true = max(0.0, a.actuator_gain * v_cmd - a.drag_c * v_cmd ** 2)        # non-ideal speed at CONTROL time
@@ -207,6 +211,9 @@ def roll_episode(built, a, y_c, half):
         mean_speed = float(step_d.mean() / a.dt)
         metrics["mean_speed"] = mean_speed
         metrics["speed_err"] = float(abs(mean_speed - a.v_ref))
+    if a.log_pred_excursion:                           # peak |lat| the MODEL believed (from its own estimates) vs the truth
+        metrics["pred_max_excursion"] = float(pred_peak)
+        metrics["excursion_gap"] = float(metrics["max_excursion"] - pred_peak)   # +ve = under-localized (thought it was safer)
     return traj, metrics
 
 
@@ -271,8 +278,11 @@ def run_sweep(a, y_c, models):
             traj, mt = roll_episode(built[name], a, y_c, half)
             per_val.append((mt["model"], traj, mt))
             se = mt.get("speed_err", float("nan"))
-            rows.append((v, mt["model"], mt["final_lat"], mt["max_excursion"], mt["in_bounds"], se))
+            rows.append((v, mt["model"], mt["final_lat"], mt["max_excursion"], mt["in_bounds"], se,
+                         mt.get("pred_max_excursion", float("nan")), mt.get("excursion_gap", float("nan"))))
             extra = f"  speed_err {se:.3f}" if a.plan_speed else ""
+            if a.log_pred_excursion:
+                extra += f"  pred|y| {mt['pred_max_excursion']:.3f}  gap {mt['excursion_gap']:+.3f}"
             print(f"  {a.sweep}={v:6.3f}  {mt['model']:22s}  final_lat {mt['final_lat']:.3f}  "
                   f"max|y| {mt['max_excursion']:.3f}  {'IN' if mt['in_bounds'] else 'OUT'}{extra}")
             _save_coords(traj, y_c, traj_dir / f"coords_{v:g}_{_short_name(mt['model'])}.csv")
@@ -281,9 +291,12 @@ def run_sweep(a, y_c, models):
 
     import csv as _csv
     with open(report / f"sweep_{a.sweep}.csv", "w", newline="") as f:
-        w = _csv.writer(f); w.writerow([a.sweep, "model", "final_lat", "max_excursion", "in_bounds", "speed_err"])
+        w = _csv.writer(f)
+        w.writerow([a.sweep, "model", "final_lat", "max_excursion", "in_bounds", "speed_err",
+                    "pred_max_excursion", "excursion_gap"])
         for r in rows:
-            w.writerow([r[0], r[1], f"{r[2]:.4f}", f"{r[3]:.4f}", int(r[4]), f"{r[5]:.4f}"])
+            w.writerow([r[0], r[1], f"{r[2]:.4f}", f"{r[3]:.4f}", int(r[4]), f"{r[5]:.4f}",
+                        f"{r[6]:.4f}", f"{r[7]:.4f}"])
 
     labels = sorted({r[1] for r in rows}, key=lambda l: ("oracle" not in l.lower(), l))
     show_speed = a.sweep == "vref"     # only the v_ref sweep wants the speed-error panel; others want excursion
@@ -354,6 +367,9 @@ def parse_args():
     p.add_argument("--w-ctrl", type=float, default=0.05); p.add_argument("--w-bound", type=float, default=60.0)
     p.add_argument("--hard-bound", action="store_true",
                    help="hard track constraint: MPPI rejects any rolled trajectory that leaves the track (vs the soft w-bound penalty)")
+    p.add_argument("--log-pred-excursion", action="store_true",
+                   help="per rollout, log the model's PREDICTED peak |y| vs the TRUE peak (localization gap: +ve = model "
+                        "thought it was safer than it was). Diagnoses hard-constraint failures.")
     p.add_argument("--term-scale", type=float, default=4.0); p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda")
     p.add_argument("--sweep", default=None, choices=["theta", "width", "wlat", "vref", "y0"],
