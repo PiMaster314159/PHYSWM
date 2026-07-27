@@ -254,7 +254,7 @@ def run_sweep(a, y_c, models):
     if a.sweep == "vref" and not a.plan_speed:
         raise SystemExit("--sweep vref requires --plan-speed (v_ref only affects the speed-planning objective)")
     vals = [float(x) for x in a.sweep_values.split(",") if x.strip()]
-    axis = {"theta": "theta0_deg", "width": "track_width", "wlat": "w_lat", "vref": "v_ref"}[a.sweep]
+    axis = {"theta": "theta0_deg", "width": "track_width", "wlat": "w_lat", "vref": "v_ref", "y0": "y0"}[a.sweep]
     built = {name: build_one(name, a) for name in models}
     report = ROOT / "results" / "track_mpc"
     if a.name:
@@ -286,7 +286,7 @@ def run_sweep(a, y_c, models):
             w.writerow([r[0], r[1], f"{r[2]:.4f}", f"{r[3]:.4f}", int(r[4]), f"{r[5]:.4f}"])
 
     labels = sorted({r[1] for r in rows}, key=lambda l: ("oracle" not in l.lower(), l))
-    show_speed = a.plan_speed          # under speed planning the control-relevant metric is speed error, not excursion
+    show_speed = a.sweep == "vref"     # only the v_ref sweep wants the speed-error panel; others want excursion
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.2))
     for lbl in labels:
         fl = [r[2] for r in rows if r[1] == lbl]
@@ -294,7 +294,7 @@ def run_sweep(a, y_c, models):
         ax1.plot(vals, fl, "-o", ms=4, color=_sweep_color(lbl), label=lbl)
         ax2.plot(vals, p2, "-o", ms=4, color=_sweep_color(lbl), label=lbl)
     xlabel = {"theta": "start heading (deg)", "width": "track width", "wlat": "w_lat",
-              "vref": "target ground speed  v_ref"}[a.sweep]
+              "vref": "target ground speed  v_ref", "y0": "start offset  y0"}[a.sweep]
     ax1.set_xlabel(xlabel); ax1.set_ylabel("final lateral error"); ax1.set_title("Convergence (final |y|)")
     ax2.set_xlabel(xlabel)
     if show_speed:
@@ -356,9 +356,9 @@ def parse_args():
                    help="hard track constraint: MPPI rejects any rolled trajectory that leaves the track (vs the soft w-bound penalty)")
     p.add_argument("--term-scale", type=float, default=4.0); p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda")
-    p.add_argument("--sweep", default=None, choices=["theta", "width", "wlat", "vref"],
+    p.add_argument("--sweep", default=None, choices=["theta", "width", "wlat", "vref", "y0"],
                    help="sweep an axis instead of a single run (start heading / track width / w-lat / "
-                        "target ground speed v_ref [needs --plan-speed])")
+                        "target ground speed v_ref [needs --plan-speed] / start lateral offset y0)")
     p.add_argument("--sweep-values", default="", help="comma list for --sweep, e.g. 30,45,60,75,90")
     p.add_argument("--name", default=None,
                    help="label for this run: outputs go to results/track_mpc/<name>/ instead of overwriting the shared files")
