@@ -1,0 +1,12 @@
+{
+  "model": "grounded",
+  "run": "64x64_dragnarrow",
+  "tag": "s1_e20_anc1_ancp1_gmlp",
+  "pose": {
+    "theta_mae_deg": 2.0065419673919678,
+    "theta_flip_pct": 0.0,
+    "x_r2": 0.994789719581604,
+    "y_r2": 0.9948302507400513,
+    "pos_rmse": 0.022904913872480392
+  }
+}

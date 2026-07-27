@@ -1,0 +1,20 @@
+{
+  "model": "ego",
+  "run": "64x64_dragnarrow",
+  "tag": "s1_e20_v1_fg5_anc1_ancp1_gbasis_mlpdec",
+  "pose": {
+    "theta_mae_deg": 1.4733936786651611,
+    "theta_flip_pct": 0.0,
+    "x_r2": 0.9951273798942566,
+    "y_r2": 0.994886577129364,
+    "pos_rmse": 0.022465219721198082
+  },
+  "coeffs": {
+    "a_v": 1.0,
+    "a_omega": 1.0
+  },
+  "dynamics": {
+    "pred_pos_err": 0.01650907707731252,
+    "pred_theta_mae_deg": 1.473360559410965
+  }
+}
