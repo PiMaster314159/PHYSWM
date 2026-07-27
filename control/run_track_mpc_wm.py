@@ -251,8 +251,10 @@ def _overlay_figure(results, y_c, half, title, out):
 def run_sweep(a, y_c, models):
     """Sweep one axis (start heading / track width / w_lat), all models, one figure + CSV.
     Models are built ONCE and rolled at every value."""
+    if a.sweep == "vref" and not a.plan_speed:
+        raise SystemExit("--sweep vref requires --plan-speed (v_ref only affects the speed-planning objective)")
     vals = [float(x) for x in a.sweep_values.split(",") if x.strip()]
-    axis = {"theta": "theta0_deg", "width": "track_width", "wlat": "w_lat"}[a.sweep]
+    axis = {"theta": "theta0_deg", "width": "track_width", "wlat": "w_lat", "vref": "v_ref"}[a.sweep]
     built = {name: build_one(name, a) for name in models}
     report = ROOT / "results" / "track_mpc"
     if a.name:
@@ -268,30 +270,38 @@ def run_sweep(a, y_c, models):
         for name in models:
             traj, mt = roll_episode(built[name], a, y_c, half)
             per_val.append((mt["model"], traj, mt))
-            rows.append((v, mt["model"], mt["final_lat"], mt["max_excursion"], mt["in_bounds"]))
-            print(f"  {a.sweep}={v:6.2f}  {mt['model']:22s}  final_lat {mt['final_lat']:.3f}  "
-                  f"max|y| {mt['max_excursion']:.3f}  {'IN' if mt['in_bounds'] else 'OUT'}")
+            se = mt.get("speed_err", float("nan"))
+            rows.append((v, mt["model"], mt["final_lat"], mt["max_excursion"], mt["in_bounds"], se))
+            extra = f"  speed_err {se:.3f}" if a.plan_speed else ""
+            print(f"  {a.sweep}={v:6.3f}  {mt['model']:22s}  final_lat {mt['final_lat']:.3f}  "
+                  f"max|y| {mt['max_excursion']:.3f}  {'IN' if mt['in_bounds'] else 'OUT'}{extra}")
             _save_coords(traj, y_c, traj_dir / f"coords_{v:g}_{_short_name(mt['model'])}.csv")
         _overlay_figure(per_val, y_c, half, f"MPC rollouts  ({a.sweep} = {v:g})", traj_dir / f"overlay_{v:g}.png")
     print(f"per-rollout coords + overlays -> {traj_dir}")
 
     import csv as _csv
     with open(report / f"sweep_{a.sweep}.csv", "w", newline="") as f:
-        w = _csv.writer(f); w.writerow([a.sweep, "model", "final_lat", "max_excursion", "in_bounds"])
+        w = _csv.writer(f); w.writerow([a.sweep, "model", "final_lat", "max_excursion", "in_bounds", "speed_err"])
         for r in rows:
-            w.writerow([r[0], r[1], f"{r[2]:.4f}", f"{r[3]:.4f}", int(r[4])])
+            w.writerow([r[0], r[1], f"{r[2]:.4f}", f"{r[3]:.4f}", int(r[4]), f"{r[5]:.4f}"])
 
     labels = sorted({r[1] for r in rows}, key=lambda l: ("oracle" not in l.lower(), l))
+    show_speed = a.plan_speed          # under speed planning the control-relevant metric is speed error, not excursion
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.2))
     for lbl in labels:
         fl = [r[2] for r in rows if r[1] == lbl]
-        mx = [r[3] for r in rows if r[1] == lbl]
+        p2 = [(r[5] if show_speed else r[3]) for r in rows if r[1] == lbl]
         ax1.plot(vals, fl, "-o", ms=4, color=_sweep_color(lbl), label=lbl)
-        ax2.plot(vals, mx, "-o", ms=4, color=_sweep_color(lbl), label=lbl)
-    xlabel = {"theta": "start heading (deg)", "width": "track width", "wlat": "w_lat"}[a.sweep]
+        ax2.plot(vals, p2, "-o", ms=4, color=_sweep_color(lbl), label=lbl)
+    xlabel = {"theta": "start heading (deg)", "width": "track width", "wlat": "w_lat",
+              "vref": "target ground speed  v_ref"}[a.sweep]
     ax1.set_xlabel(xlabel); ax1.set_ylabel("final lateral error"); ax1.set_title("Convergence (final |y|)")
-    ax2.set_xlabel(xlabel); ax2.set_ylabel("peak |y| excursion"); ax2.set_title("Peak excursion / constraint")
-    if a.sweep == "width":     # boundary line: max|y| above it = left the track
+    ax2.set_xlabel(xlabel)
+    if show_speed:
+        ax2.set_ylabel("speed error  |mean_v − v_ref|"); ax2.set_title("Speed tracking")
+    else:
+        ax2.set_ylabel("peak |y| excursion"); ax2.set_title("Peak excursion / constraint")
+    if a.sweep == "width" and not show_speed:   # boundary line: max|y| above it = left the track
         ax2.plot(vals, [v / 2 for v in vals], "k--", lw=1, label="track edge (W/2)")
     for ax in (ax1, ax2):
         ax.grid(alpha=0.3); ax.legend(fontsize=8)
@@ -346,8 +356,9 @@ def parse_args():
                    help="hard track constraint: MPPI rejects any rolled trajectory that leaves the track (vs the soft w-bound penalty)")
     p.add_argument("--term-scale", type=float, default=4.0); p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda")
-    p.add_argument("--sweep", default=None, choices=["theta", "width", "wlat"],
-                   help="sweep an axis instead of a single run (start heading / track width / w-lat)")
+    p.add_argument("--sweep", default=None, choices=["theta", "width", "wlat", "vref"],
+                   help="sweep an axis instead of a single run (start heading / track width / w-lat / "
+                        "target ground speed v_ref [needs --plan-speed])")
     p.add_argument("--sweep-values", default="", help="comma list for --sweep, e.g. 30,45,60,75,90")
     p.add_argument("--name", default=None,
                    help="label for this run: outputs go to results/track_mpc/<name>/ instead of overwriting the shared files")
