@@ -237,6 +237,7 @@ class JEPA(WorldModel):
         predictor_mode: str = PREDICTOR_MODE,
         predictor_lock_pose: bool = PHYSICS_LOCK_POSE,
         state_head: bool = False,
+        in_channels: int = IN_CHANNELS,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -244,6 +245,7 @@ class JEPA(WorldModel):
             grid_size=grid_size,
             latent_dim=latent_dim,
             channels=encoder_channels,
+            in_channels=in_channels,
         )
         self.predictor  = Predictor(
             latent_dim=latent_dim,

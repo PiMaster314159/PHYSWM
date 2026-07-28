@@ -33,7 +33,7 @@ from models.components import state_to_target, pose_stats
 from models.jepa import JEPA
 from models.state_ae import EgoWorldModel, ego_rollout_loss
 from models.grounded import GroundedJEPA
-from models.dataset import make_dataloaders, make_rollout_dataloaders
+from models.dataset import make_dataloaders, make_rollout_dataloaders, set_default_n_frames
 from eval import ego_eval, grounded_eval, jepa_eval
 
 EVAL = {"ego": ego_eval.evaluate, "grounded": grounded_eval.evaluate, "jepa": jepa_eval.evaluate}
@@ -45,6 +45,9 @@ def parse_args():
     # shared
     p.add_argument("--run", default=C.RUN, help="dataset name (.h5 stem); must already exist")
     p.add_argument("--grid-size", type=int, default=C.GRID_SIZE)
+    p.add_argument("--n-frames", type=int, default=C.N_FRAMES,
+                   help="frames stacked as encoder input channels (>1 = history; lets the encoder read hidden "
+                        "velocity from motion -- prerequisite for throttle/bicycle dynamics)")
     p.add_argument("--latent-dim", type=int, default=C.LATENT_DIM)
     p.add_argument("--pred-step", type=int, default=C.PRED_STEP)
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
@@ -94,14 +97,17 @@ def build_model(a):
     dt = a.pred_step * C.DT
     if a.model == "jepa":
         m = JEPA(grid_size=a.grid_size, latent_dim=a.latent_dim, predictor_mode=a.predictor_mode,
-                 predictor_lock_pose=a.lock_pose, state_head=(a.lam_anchor > 0 or a.lam_anchor_pred > 0))
+                 predictor_lock_pose=a.lock_pose, state_head=(a.lam_anchor > 0 or a.lam_anchor_pred > 0),
+                 in_channels=a.n_frames)
         m.predictor.dt = dt      # physics integrates over the full horizon; no-op for mlp/residual
         return m
     if a.model == "ego":
         return EgoWorldModel(grid_size=a.grid_size, dt=dt, residual_budget=a.residual_budget,
-                             residual_mode=a.residual, learn_coeffs=a.learn_coeffs, decoder=a.decoder)
+                             residual_mode=a.residual, learn_coeffs=a.learn_coeffs, decoder=a.decoder,
+                             in_channels=a.n_frames)
     return GroundedJEPA(grid_size=a.grid_size, latent_dim=a.latent_dim, block_dim=a.block_dim, dt=dt,
                         lock_block=a.lock_block, block_budget=a.block_budget, residual_mode=a.residual,
+                        in_channels=a.n_frames,
                         use_decoder=(a.use_decoder or a.lam_recon > 0), learn_coeffs=a.learn_coeffs)
 
 
@@ -145,6 +151,7 @@ def build_tag(a):
     if a.model in ("ego", "grounded") and a.learn_coeffs: tag += "_learn"
     if a.model in ("ego", "grounded") and a.residual != "none": tag += f"_g{a.residual}"   # gbasis / gmlp (distinct ablation ckpts)
     if a.rollout_k > 1 and a.model != "ego": tag += f"_roll{a.rollout_k}"   # ego adds this in its own branch
+    if a.n_frames > 1: tag += f"_hist{a.n_frames}"   # frame-stack history depth
     if a.model == "ego": tag += "_bc" if a.decoder == "broadcast" else "_mlpdec"   # decoder token last
     if a.note: tag += f"_{a.note}"
     return tag
@@ -278,6 +285,7 @@ def main():
     if ds_grid != a.grid_size:
         print(f"grid_size {a.grid_size} -> {ds_grid}  (inferred from {data_path.name})")
         a.grid_size = ds_grid
+    set_default_n_frames(a.n_frames)                   # so eval/probe make_dataloaders() also return K-frame stacks
 
     print(f"=== {experiment} ===")
     print(f"device={a.device}  data={data_path.name}  model={a.model}  "

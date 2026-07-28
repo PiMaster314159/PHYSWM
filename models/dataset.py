@@ -379,6 +379,16 @@ def make_history_rollout_dataloaders(
     return train_dl, val_dl
 
 
+_DEFAULT_N_FRAMES = 1   # module default so eval/probe make_dataloaders() calls inherit --n-frames without threading
+
+
+def set_default_n_frames(k: int) -> None:
+    """Set the process-wide default frame-stack depth. train.py calls this once at startup, so every
+    later make_dataloaders() (training, eval, probe) returns K-frame stacks without passing n_frames."""
+    global _DEFAULT_N_FRAMES
+    _DEFAULT_N_FRAMES = int(k)
+
+
 def make_dataloaders(
     h5_path: Union[str, Path],
     batch_size: int = BATCH_SIZE,
@@ -387,8 +397,13 @@ def make_dataloaders(
     return_state: bool = False,
     num_workers: int = 0,
     step: int = PRED_STEP,
+    n_frames: int = None,
 ) -> tuple:
     """Train/val DataLoaders with an episode-level split.
+
+    n_frames > 1 returns HISTORY stacks (K frames as channels, newest last) via make_history_dataloaders,
+    so the same call site works for single- and multi-frame training. Defaults to the process-wide
+    set_default_n_frames() value.
 
     Parameters
     ----------
@@ -411,6 +426,10 @@ def make_dataloaders(
     -------
     tuple of (train_loader, val_loader)
     """
+    n = _DEFAULT_N_FRAMES if n_frames is None else n_frames
+    if n > 1:                                  # history stacks: frame is (K, H, W), pose at the newest frame
+        return make_history_dataloaders(h5_path, batch_size=batch_size, val_frac=val_frac,
+                                        seed=seed, stack=n, num_workers=num_workers, step=step)
     with h5py.File(h5_path, "r") as f:
         n_ep = len(f["episode_starts"])
 

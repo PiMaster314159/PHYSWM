@@ -98,6 +98,7 @@ ACTUATOR_GAIN = 1.0
 
 # --- Model architecture ----------------------------------------------------
 IN_CHANNELS      = 1
+N_FRAMES         = 1               # frames stacked as encoder input channels (>1 = history; needed for hidden velocity)
 LATENT_DIM       = 128
 ENCODER_CHANNELS = (32, 64, 128)   # output channels per stride-2 conv stage
 PREDICTOR_HIDDEN = 256

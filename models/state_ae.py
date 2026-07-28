@@ -155,9 +155,9 @@ class EgoWorldModel(WorldModel):
         """Ego's own terms: recon + dyn + pred_recon + variance floor. anchor/anchor_pred are
         the shared WorldModel.pose_supervision (ego's pose buffers stay 0/1, so it's raw MSE)."""
         fg    = weights.get("fg_weight", 0.0)
-        recon = img_loss(out["recon"],      batch["frame"],      fg)
+        recon = img_loss(out["recon"],      batch["frame"][:, -1:],      fg)   # [:, -1:] = newest frame (history stack)
         dyn   = F.mse_loss(out["pred_next_z"], out["target_next_z"].detach())
-        pred  = img_loss(out["pred_recon"], batch["next_frame"], fg)
+        pred  = img_loss(out["pred_recon"], batch["next_frame"][:, -1:], fg)   # newest of the next stack
         std   = (out["z"].var(0) + 1e-4).sqrt()                        # per-dim batch std (grad-safe)
         var   = F.relu(weights.get("var_gamma", 0.1) - std).mean()     # > 0 only below the floor
         total = (weights.get("recon", 1.0) * recon + weights.get("dyn", 1.0) * dyn

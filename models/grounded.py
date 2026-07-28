@@ -162,11 +162,12 @@ class GroundedJEPA(WorldModel):
         use_decoder: bool = False,
         learn_coeffs: bool = False,
         residual_mode: str = "none",
+        in_channels: int = IN_CHANNELS,
     ):
         super().__init__()
         self.latent_dim = latent_dim
         self.block_dim  = block_dim
-        self.encoder = GroundedEncoder(grid_size, latent_dim, block_dim, channels=encoder_channels)
+        self.encoder = GroundedEncoder(grid_size, latent_dim, block_dim, channels=encoder_channels, in_channels=in_channels)
         self.predictor = GroundedPredictor(
             latent_dim, block_dim, ACTION_DIM, predictor_hidden, dt, lock_block, block_budget,
             learn_coeffs=learn_coeffs, residual_mode=residual_mode,
@@ -203,7 +204,7 @@ class GroundedJEPA(WorldModel):
         parts = {"pred": pred.item(), "pred_block": block_pred.item(),
                  "pred_free": free_pred.item(), "sigreg": sig.item()}
         if "recon" in out and weights.get("recon", 0.0) > 0:
-            recon = img_loss(out["recon"], batch["frame"], weights.get("fg_weight", 0.0))
+            recon = img_loss(out["recon"], batch["frame"][:, -1:], weights.get("fg_weight", 0.0))   # newest frame
             total = total + weights["recon"] * recon
             parts["recon"] = recon.item()
         if self.predictor.residual is not None and weights.get("l1", 0.0) > 0:   # sparsify basis coeffs
