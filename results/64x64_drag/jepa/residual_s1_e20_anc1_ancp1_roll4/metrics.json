@@ -1,0 +1,21 @@
+{
+  "model": "jepa",
+  "run": "64x64_drag",
+  "tag": "residual_s1_e20_anc1_ancp1_roll4",
+  "pose": {
+    "theta_mae_deg": 3.00650691986084,
+    "theta_flip_pct": 0.0,
+    "x_r2": 0.9968942999839783,
+    "y_r2": 0.9947331547737122,
+    "pos_rmse": 0.020471984520554543
+  },
+  "mpc": {
+    "final_lat": 0.19604438756910136,
+    "final_head_deg": 46.342914730203205,
+    "max_excursion": 0.19604438756910136,
+    "rms_lat": 0.12051420720520484,
+    "in_bounds": true,
+    "mean_speed": 0.1470067241640527,
+    "speed_err": 0.05299327583594732
+  }
+}
