@@ -238,9 +238,12 @@ class JEPA(WorldModel):
         predictor_lock_pose: bool = PHYSICS_LOCK_POSE,
         state_head: bool = False,
         in_channels: int = IN_CHANNELS,
+        dynamics: str = "unicycle",
     ):
-        super().__init__()
+        pose_dim = 5 if dynamics == "bicycle" else 4      # bicycle: readout adds velocity [x,y,cos,sin,v]
+        super().__init__(pose_dim=pose_dim)
         self.latent_dim = latent_dim
+        self.dynamics   = dynamics
         self.encoder    = Encoder(
             grid_size=grid_size,
             latent_dim=latent_dim,
@@ -258,7 +261,7 @@ class JEPA(WorldModel):
         # SIGReg: it reads pose out of the whole latent, so the code can stay distributed
         # and isotropic while still being linearly decodable to pose). Linear (not MLP) on
         # purpose, so a low readout loss means pose is genuinely linearly present.
-        self.state_head = nn.Linear(latent_dim, 4) if state_head else None
+        self.state_head = nn.Linear(latent_dim, pose_dim) if state_head else None
 
     def encode(self, frame: torch.Tensor) -> torch.Tensor:
         """(B, 1, H, W) -> (B, latent_dim)."""

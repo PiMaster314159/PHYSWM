@@ -34,11 +34,11 @@ import torch.nn.functional as F
 
 from config import (
     GRID_SIZE, LATENT_DIM, ACTION_DIM, ENCODER_CHANNELS, PREDICTOR_HIDDEN,
-    IN_CHANNELS, DT, PHYSICS_BLOCK_DIM,
+    IN_CHANNELS, DT, PHYSICS_BLOCK_DIM, WHEELBASE,
 )
 
 from models.base import WorldModel
-from models.components import sigreg_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder, img_loss, make_residual
+from models.components import sigreg_loss, conv_trunk, constrain_pose, unicycle_step, bicycle_step, mlp, MLPDecoder, img_loss, make_residual
 
 
 # ## Encoder with a split head
@@ -62,8 +62,8 @@ class GroundedEncoder(nn.Module):
         super().__init__()
         if block_dim >= latent_dim:
             raise ValueError(f"block_dim {block_dim} must be < latent_dim {latent_dim}")
-        if block_dim != 4:
-            raise ValueError(f"block_dim must be 4 (x, y, cos, sin); got {block_dim}")
+        if block_dim not in (4, 5):
+            raise ValueError(f"block_dim must be 4 [x,y,cos,sin] or 5 [+v bicycle]; got {block_dim}")
         self.block_dim = block_dim
         self.free_dim  = latent_dim - block_dim
 
@@ -105,10 +105,14 @@ class GroundedPredictor(nn.Module):
         block_budget: float = 0.0,
         learn_coeffs: bool = False,
         residual_mode: str = "none",
+        dynamics: str = "unicycle",
+        wheelbase: float = WHEELBASE,
     ):
         super().__init__()
         self.block_dim    = block_dim
         self.dt           = dt
+        self.dynamics     = dynamics
+        self.wheelbase    = wheelbase
         self.lock_block   = lock_block
         self.block_budget = block_budget
         # gray-box speed/turn scales on the block kinematics. Learnable lets the block
@@ -132,8 +136,11 @@ class GroundedPredictor(nn.Module):
     def forward(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         K          = self.block_dim
         learned    = self.net(torch.cat([z, action], dim=-1))
-        block_pred = unicycle_step(z[:, :K], action, self.dt,
-                                   self.log_a_v.exp(), self.log_a_omega.exp())
+        if self.dynamics == "bicycle":                # 5-D block, action (a, delta); a_v = throttle gain
+            block_pred = bicycle_step(z[:, :K], action, self.dt, self.wheelbase, a_accel=self.log_a_v.exp())
+        else:
+            block_pred = unicycle_step(z[:, :K], action, self.dt,
+                                       self.log_a_v.exp(), self.log_a_omega.exp())
         if self.residual is not None:                 # structured physics-basis correction on the block
             block_pred = block_pred + self.residual(z[:, :K], action, free=z[:, K:])
         elif not self.lock_block and self.block_budget > 0:
@@ -163,14 +170,19 @@ class GroundedJEPA(WorldModel):
         learn_coeffs: bool = False,
         residual_mode: str = "none",
         in_channels: int = IN_CHANNELS,
+        dynamics: str = "unicycle",
+        wheelbase: float = WHEELBASE,
     ):
-        super().__init__()
+        if dynamics == "bicycle":
+            block_dim = 5                                 # block carries velocity: [x,y,cos,sin,v]
+        super().__init__(pose_dim=block_dim)
         self.latent_dim = latent_dim
         self.block_dim  = block_dim
+        self.dynamics   = dynamics
         self.encoder = GroundedEncoder(grid_size, latent_dim, block_dim, channels=encoder_channels, in_channels=in_channels)
         self.predictor = GroundedPredictor(
             latent_dim, block_dim, ACTION_DIM, predictor_hidden, dt, lock_block, block_budget,
-            learn_coeffs=learn_coeffs, residual_mode=residual_mode,
+            learn_coeffs=learn_coeffs, residual_mode=residual_mode, dynamics=dynamics, wheelbase=wheelbase,
         )
         self.decoder = MLPDecoder(block_dim, grid_size) if use_decoder else None
 

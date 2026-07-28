@@ -30,9 +30,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.base import WorldModel
-from models.components import img_loss, conv_trunk, constrain_pose, unicycle_step, mlp, MLPDecoder, make_residual
+from models.components import img_loss, conv_trunk, constrain_pose, unicycle_step, bicycle_step, mlp, MLPDecoder, make_residual
 
-from config import GRID_SIZE, ENCODER_CHANNELS, IN_CHANNELS, ACTION_DIM, DT
+from config import GRID_SIZE, ENCODER_CHANNELS, IN_CHANNELS, ACTION_DIM, DT, WHEELBASE
 
 STATE_DIM = 4   # x, y, cos th, sin th
 
@@ -48,10 +48,10 @@ class StateEncoder(nn.Module):
     """
 
     def __init__(self, grid_size: int = GRID_SIZE, channels: tuple = ENCODER_CHANNELS,
-                 in_channels: int = IN_CHANNELS):
+                 in_channels: int = IN_CHANNELS, state_dim: int = STATE_DIM):
         super().__init__()
         self.conv, flat = conv_trunk(grid_size, in_channels, channels)
-        self.head = nn.Linear(flat, STATE_DIM)
+        self.head = nn.Linear(flat, state_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.ndim != 4:
@@ -103,17 +103,23 @@ class EgoWorldModel(WorldModel):
     def __init__(self, grid_size: int = GRID_SIZE, dt: float = DT,
                  channels: tuple = ENCODER_CHANNELS, in_channels: int = IN_CHANNELS,
                  renderer_hidden: int = 512, residual_budget: float = 0.0,
-                 residual_mode: str = "none", learn_coeffs: bool = False, decoder: str = "mlp"):
-        super().__init__()
+                 residual_mode: str = "none", learn_coeffs: bool = False, decoder: str = "mlp",
+                 dynamics: str = "unicycle", wheelbase: float = WHEELBASE):
+        # bicycle: the state carries velocity -> block is 5-D [x,y,cosθ,sinθ,v]; unicycle stays 4-D.
+        state_dim = 5 if dynamics == "bicycle" else STATE_DIM
+        super().__init__(pose_dim=state_dim)
         self.dt = dt
+        self.dynamics = dynamics
+        self.wheelbase = wheelbase
+        self.state_dim = state_dim
         self.residual_budget = residual_budget
-        self.encoder  = StateEncoder(grid_size, channels, in_channels)
+        self.encoder  = StateEncoder(grid_size, channels, in_channels, state_dim=state_dim)
         # spatial-broadcast decoder can place an object at (x,y); the MLP cannot (it
         # collapses to the mean frame), so "broadcast" is the default.
         if decoder == "broadcast":
-            self.renderer = SpatialBroadcastDecoder(STATE_DIM, grid_size)
+            self.renderer = SpatialBroadcastDecoder(state_dim, grid_size)
         elif decoder == "mlp":
-            self.renderer = MLPDecoder(STATE_DIM, grid_size, renderer_hidden)
+            self.renderer = MLPDecoder(state_dim, grid_size, renderer_hidden)
         else:
             raise ValueError(f"decoder must be 'broadcast' or 'mlp', got {decoder!r}")
         # gray-box physical coefficients (log-space, =1 at init). FROZEN by default:
@@ -137,15 +143,18 @@ class EgoWorldModel(WorldModel):
         return self.renderer(s)
 
     def predict(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        nxt = unicycle_step(s, action, self.dt, self.log_a_v.exp(), self.log_a_omega.exp())
-        if self.residual is not None:                       # structured physics-basis correction
+        if self.dynamics == "bicycle":                      # 5-D block, action (a, delta); a_v = throttle gain
+            nxt = bicycle_step(s, action, self.dt, self.wheelbase, a_accel=self.log_a_v.exp())
+        else:
+            nxt = unicycle_step(s, action, self.dt, self.log_a_v.exp(), self.log_a_omega.exp())
+        if self.residual is not None:                       # structured physics-basis correction (unicycle only for now)
             nxt = nxt + self.residual(s, action)
         return nxt
     step = predict   # alias: the state IS pose, so "step" and "predict" are the same call
 
     def decode_pose(self, z: torch.Tensor) -> torch.Tensor:
-        """(B, 4) state IS real-unit pose [x,y,cosθ,sinθ]."""
-        return z[:, :4]
+        """The state IS real-unit pose: (B,4) [x,y,cosθ,sinθ], or (B,5) with v for the bicycle."""
+        return z[:, :self.state_dim]
 
     def extra_forward(self, frame, action, next_frame, out):
         """Render the encoded and predicted states to frames (the reconstruction grounding)."""

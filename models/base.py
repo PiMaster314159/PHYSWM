@@ -3,10 +3,11 @@ import torch, torch.nn as nn, torch.nn.functional as F
 from models.components import standardize, unstandardize, state_to_target
 
 class WorldModel(nn.Module):
-    def __init__(self):
+    def __init__(self, pose_dim: int = 4):
         super().__init__()
-        self.register_buffer("pose_mean", torch.zeros(4))
-        self.register_buffer("pose_std",  torch.ones(4))
+        self.pose_dim = pose_dim                          # 4 = [x,y,cos,sin] (unicycle); 5 adds v (bicycle)
+        self.register_buffer("pose_mean", torch.zeros(pose_dim))
+        self.register_buffer("pose_std",  torch.ones(pose_dim))
 
     # --- hooks each subclass implements ---
     def encode(self, frame):            raise NotImplementedError

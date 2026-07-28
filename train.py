@@ -95,17 +95,18 @@ def parse_args():
 
 def build_model(a):
     dt = a.pred_step * C.DT
+    dyn = getattr(a, "dynamics", "unicycle")             # inferred from the dataset in main()
     if a.model == "jepa":
         m = JEPA(grid_size=a.grid_size, latent_dim=a.latent_dim, predictor_mode=a.predictor_mode,
                  predictor_lock_pose=a.lock_pose, state_head=(a.lam_anchor > 0 or a.lam_anchor_pred > 0),
-                 in_channels=a.n_frames)
+                 in_channels=a.n_frames, dynamics=dyn)
         m.predictor.dt = dt      # physics integrates over the full horizon; no-op for mlp/residual
         return m
     if a.model == "ego":
         return EgoWorldModel(grid_size=a.grid_size, dt=dt, residual_budget=a.residual_budget,
                              residual_mode=a.residual, learn_coeffs=a.learn_coeffs, decoder=a.decoder,
-                             in_channels=a.n_frames)
-    return GroundedJEPA(grid_size=a.grid_size, latent_dim=a.latent_dim, block_dim=a.block_dim, dt=dt,
+                             in_channels=a.n_frames, dynamics=dyn)
+    return GroundedJEPA(grid_size=a.grid_size, latent_dim=a.latent_dim, block_dim=a.block_dim, dt=dt, dynamics=dyn,
                         lock_block=a.lock_block, block_budget=a.block_budget, residual_mode=a.residual,
                         in_channels=a.n_frames,
                         use_decoder=(a.use_decoder or a.lam_recon > 0), learn_coeffs=a.learn_coeffs)
@@ -152,6 +153,7 @@ def build_tag(a):
     if a.model in ("ego", "grounded") and a.residual != "none": tag += f"_g{a.residual}"   # gbasis / gmlp (distinct ablation ckpts)
     if a.rollout_k > 1 and a.model != "ego": tag += f"_roll{a.rollout_k}"   # ego adds this in its own branch
     if a.n_frames > 1: tag += f"_hist{a.n_frames}"   # frame-stack history depth
+    if getattr(a, "dynamics", "unicycle") == "bicycle": tag += "_bike"   # bicycle/throttle (5-D state, a,delta action)
     if a.model == "ego": tag += "_bc" if a.decoder == "broadcast" else "_mlpdec"   # decoder token last
     if a.note: tag += f"_{a.note}"
     return tag
@@ -160,8 +162,9 @@ def build_tag(a):
 def loss_batch(b, need_state, device):
     batch = {"frame": b["frame"].to(device), "next_frame": b["next_frame"].to(device)}
     if need_state and "state" in b:
-        batch["s_target"]      = state_to_target(b["state"]).to(device)
-        batch["s_next_target"] = state_to_target(b["next_state"]).to(device)
+        vel, nvel = b.get("velocity"), b.get("next_velocity")   # bicycle carries v -> 5-D [x,y,cos,sin,v]
+        batch["s_target"]      = state_to_target(b["state"], vel).to(device)
+        batch["s_next_target"] = state_to_target(b["next_state"], nvel).to(device)
     return batch
 
 
@@ -183,7 +186,9 @@ def train_standard(model, a, data_path, ckpt_path, report_dir):
     need_state = a.lam_anchor > 0 or a.lam_anchor_pred > 0
     if a.model == "jepa" and need_state:      # bake pose stats so decode_pose is real-unit + readout standardizes
         stats_dl, _ = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED, return_state=True, step=a.pred_step)
-        mean, std = pose_stats(torch.from_numpy(stats_dl.dataset.states).float())
+        _vel = getattr(stats_dl.dataset, 'velocities', None)   # bicycle: standardize v too
+        _velt = torch.from_numpy(_vel).float() if _vel is not None else None
+        mean, std = pose_stats(torch.from_numpy(stats_dl.dataset.states).float(), _velt)
         model.set_pose_stats(mean.to(device), std.to(device))
 
     train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
@@ -217,7 +222,9 @@ def train_rollout(model, a, data_path, ckpt_path, report_dir):
     device = a.device
     if a.model == "jepa" and (a.lam_anchor > 0 or a.lam_anchor_pred > 0):   # bake pose stats (as in train_standard)
         stats_dl, _ = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED, return_state=True, step=a.pred_step)
-        mean, std = pose_stats(torch.from_numpy(stats_dl.dataset.states).float())
+        _vel = getattr(stats_dl.dataset, 'velocities', None)   # bicycle: standardize v too
+        _velt = torch.from_numpy(_vel).float() if _vel is not None else None
+        mean, std = pose_stats(torch.from_numpy(stats_dl.dataset.states).float(), _velt)
         model.set_pose_stats(mean.to(device), std.to(device))
     train_dl, val_dl = make_rollout_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
                                                 K=a.rollout_k, step=a.pred_step)
@@ -273,18 +280,22 @@ def main():
         a.lam_recon = 1.0 if a.model == "ego" else C.LAM_RECON
     if a.recon_fg_weight is None:
         a.recon_fg_weight = 5.0 if a.model == "ego" else C.RECON_FG_WEIGHT
-    tag = build_tag(a)
     data_path = C.DATASETS_DIR / f"{a.run}.h5"
-    ckpt_path, report_dir = C.experiment_paths(a.run, a.model, tag)
-    experiment = f"{a.run}/{a.model}/{tag}"
     if not data_path.exists():
         raise SystemExit(f"dataset not found: {data_path} (this runner does not collect; build it first)")
 
-    with h5py.File(data_path, "r") as _f:              # grid is a property of the DATASET, not a CLI choice:
-        ds_grid = int(_f.attrs["grid_size"])           # infer it so a stale/absent --grid-size can't build a mismatched encoder
+    with h5py.File(data_path, "r") as _f:              # grid + dynamics are properties of the DATASET, not CLI choices:
+        ds_grid = int(_f.attrs["grid_size"])           # infer them so the model matches what produced the data
+        a.dynamics = str(_f.attrs.get("dynamics", "unicycle"))
     if ds_grid != a.grid_size:
         print(f"grid_size {a.grid_size} -> {ds_grid}  (inferred from {data_path.name})")
         a.grid_size = ds_grid
+    if a.dynamics == "bicycle":
+        print(f"dynamics = bicycle  (5-D state [x,y,cos,sin,v], action (a,delta); inferred from {data_path.name})")
+
+    tag = build_tag(a)                                 # after dynamics is set, so the tag carries _bike
+    ckpt_path, report_dir = C.experiment_paths(a.run, a.model, tag)
+    experiment = f"{a.run}/{a.model}/{tag}"
     set_default_n_frames(a.n_frames)                   # so eval/probe make_dataloaders() also return K-frame stacks
 
     print(f"=== {experiment} ===")
@@ -299,7 +310,11 @@ def main():
         train_standard(model, a, data_path, ckpt_path, report_dir)
 
     model.load_state_dict(torch.load(ckpt_path, map_location=a.device, weights_only=True))
-    EVAL[a.model](model, a, data_path, report_dir)
+    if getattr(a, "dynamics", "unicycle") == "bicycle":   # lean, model-agnostic eval (velocity recovery)
+        from eval import bicycle_eval
+        bicycle_eval.evaluate(model, a, data_path, report_dir)
+    else:
+        EVAL[a.model](model, a, data_path, report_dir)
     print(f"\ndone -> {report_dir}")
 
 

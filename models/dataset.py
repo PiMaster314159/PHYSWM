@@ -67,6 +67,7 @@ class RobotTransitions(Dataset):
             self.frames    = f["frames"][:]
             self.actions   = f["actions"][:]
             self.states    = f["states"][:] if return_state else None
+            self.velocities = f["velocities"][:] if ("velocities" in f and return_state) else None  # bicycle: hidden v
             starts         = f["episode_starts"][:]
             lengths        = f["episode_lengths"][:]
             self.grid_size = int(f.attrs["grid_size"])
@@ -104,6 +105,9 @@ class RobotTransitions(Dataset):
         if self.return_state:
             sample["state"]      = torch.from_numpy(self.states[i]).to(torch.float32)
             sample["next_state"] = torch.from_numpy(self.states[j]).to(torch.float32)
+            if self.velocities is not None:
+                sample["velocity"]      = torch.tensor([float(self.velocities[i])], dtype=torch.float32)
+                sample["next_velocity"] = torch.tensor([float(self.velocities[j])], dtype=torch.float32)
 
         return sample
 
@@ -220,6 +224,7 @@ class HistoryTransitions(Dataset):
             self.actions = f["actions"][:]
             self.states  = f["states"][:]
             self.gains   = f["gains"][:] if "gains" in f else None
+            self.velocities = f["velocities"][:] if "velocities" in f else None   # bicycle: hidden v
             starts  = f["episode_starts"][:]
             lengths = f["episode_lengths"][:]
             self.grid_size = int(f.attrs["grid_size"])
@@ -267,6 +272,9 @@ class HistoryTransitions(Dataset):
         }
         if self.gains is not None:
             sample["gain"] = torch.tensor([float(self.gains[i])], dtype=torch.float32)   # (1,)
+        if self.velocities is not None:
+            sample["velocity"]      = torch.tensor([float(self.velocities[i])], dtype=torch.float32)
+            sample["next_velocity"] = torch.tensor([float(self.velocities[i + step])], dtype=torch.float32)
         return sample
 
 

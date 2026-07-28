@@ -52,10 +52,14 @@ def sigreg_loss(
     return T_stat.mean()
 
 
-def state_to_target(states: torch.Tensor) -> torch.Tensor:
-    """(N,3) (x,y,theta) -> (N,4) (x,y,cos,sin). Shared anchor-target builder."""
+def state_to_target(states: torch.Tensor, velocities: torch.Tensor = None) -> torch.Tensor:
+    """(N,3) (x,y,theta) -> (N,4) (x,y,cos,sin). With `velocities` (N,) or (N,1), appends v -> (N,5) for the
+    bicycle block [x,y,cos,sin,v]. Shared anchor-target builder."""
     x, y, th = states[:, 0], states[:, 1], states[:, 2]
-    return torch.stack([x, y, torch.cos(th), torch.sin(th)], dim=1)
+    cols = [x, y, torch.cos(th), torch.sin(th)]
+    if velocities is not None:
+        cols.append(velocities.reshape(-1))
+    return torch.stack(cols, dim=1)
 
 def img_loss(pred: torch.Tensor, target: torch.Tensor, fg_weight: float = 0.0) -> torch.Tensor:
     """Reconstruction loss. fg_weight>0 averages error over lit (foreground) and black
@@ -71,9 +75,9 @@ def img_loss(pred: torch.Tensor, target: torch.Tensor, fg_weight: float = 0.0) -
     bg_mean = (err2 * (1.0 - fg)).sum() / (1.0 - fg).sum().clamp(min=1.0)
     return bg_mean + fg_weight * fg_mean
 
-def pose_stats(states):
-    """(N,3) -> standardization mean/std over [x,y,cosθ,sinθ]"""
-    T = state_to_target(states)
+def pose_stats(states, velocities=None):
+    """(N,3) -> standardization mean/std over [x,y,cosθ,sinθ]; with velocities, over [...,v] (bicycle)."""
+    T = state_to_target(states, velocities)
     return T.mean(0), T.std(0) + 1e-6
 
 def standardize(t, mean, std):   return (t - mean) / std
@@ -97,7 +101,12 @@ def conv_trunk(grid_size, in_channels, channels):
     return trunk, flat
 
 def constrain_pose(raw, eps=1e-6):
-    return torch.cat([torch.sigmoid(raw[:, :2]), F.normalize(raw[:, 2:4], dim=1, eps=eps)], dim=1)
+    """[x,y] into [0,1] (sigmoid), heading onto the unit circle. If raw has a 5th column (bicycle block),
+    constrain velocity to >=0 (softplus) and append it."""
+    out = torch.cat([torch.sigmoid(raw[:, :2]), F.normalize(raw[:, 2:4], dim=1, eps=eps)], dim=1)
+    if raw.shape[1] >= 5:
+        out = torch.cat([out, F.softplus(raw[:, 4:5])], dim=1)   # v >= 0
+    return out
 
 
 def unicycle_step(state, action, dt, a_v=1.0, a_omega=1.0, eps=1e-6):
@@ -116,6 +125,29 @@ def unicycle_step(state, action, dt, a_v=1.0, a_omega=1.0, eps=1e-6):
     x_new  = x + a_v * v * c_new * dt
     y_new  = y + a_v * v * s_new * dt
     return torch.cat([x_new, y_new, c_new, s_new], dim=1)
+
+
+def bicycle_step(state, action, dt, wheelbase, a_accel=1.0, v_max=None, eps=1e-6):
+    """Kinematic-bicycle step on the 5-D block [x, y, cosθ, sinθ, v]; action [a, delta] (accel, steering).
+    Velocity integrates the throttle (v_new = v + a_accel*a*dt, clamped >=0); heading turns by
+    (v_new/L)*tan(delta)*dt (yaw scales with speed); position moves along the new heading. Semi-implicit,
+    matching unicycle_step. a_accel is the gray-box throttle gain (=1 = exact known dynamics). The torch
+    counterpart to sim.dynamics.bicycle_step."""
+    x, y = state[:, 0:1], state[:, 1:2]
+    c, s = state[:, 2:3], state[:, 3:4]
+    v     = state[:, 4:5]
+    n = torch.clamp(torch.sqrt(c * c + s * s), min=eps); c, s = c / n, s / n
+    a, delta = action[:, 0:1], action[:, 1:2]
+    v_new = torch.clamp(v + a_accel * a * dt, min=0.0)
+    if v_max is not None:
+        v_new = torch.clamp(v_new, max=v_max)
+    dtheta = (v_new / wheelbase) * torch.tan(delta) * dt        # yaw rate scales with speed
+    cw, sw = torch.cos(dtheta), torch.sin(dtheta)
+    c_new  = c * cw - s * sw
+    s_new  = s * cw + c * sw
+    x_new  = x + v_new * c_new * dt
+    y_new  = y + v_new * s_new * dt
+    return torch.cat([x_new, y_new, c_new, s_new, v_new], dim=1)
 
 
 def mlp(sizes, out_act=None):
