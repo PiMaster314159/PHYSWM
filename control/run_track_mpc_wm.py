@@ -25,6 +25,7 @@ import os
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import sys
 import argparse
+from collections import deque
 from pathlib import Path
 
 ROOT = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "config.py").exists())
@@ -68,7 +69,7 @@ def build_unicycle(a):
         return np.stack([x + vv * np.cos(th2) * dt, y + vv * np.sin(th2) * dt, th2], axis=1)
     def pose(S):
         return S[:, :3].copy()
-    return observe, dynamics, pose, 3, "unicycle (oracle)"
+    return observe, dynamics, pose, 3, "unicycle (oracle)", 1
 
 
 def build_neural(name, a):
@@ -78,24 +79,29 @@ def build_neural(name, a):
     g = a.grid_size
     v = a.v
 
+    sd = torch.load(a.ckpt_for(name), map_location=dev, weights_only=True)
+    fc = sd.get("encoder.conv.0.weight")               # infer frame-stack depth from the checkpoint's first conv
+    n_frames = int(fc.shape[1]) if fc is not None else 1   # (out, IN, k, k) -> IN = frames stacked as channels
+
     if name == "ego":
         from models.state_ae import EgoWorldModel
-        model = EgoWorldModel(grid_size=g, dt=a.dt, learn_coeffs=True, decoder="mlp", residual_mode=a.residual)
+        model = EgoWorldModel(grid_size=g, dt=a.dt, learn_coeffs=True, decoder="mlp", residual_mode=a.residual, in_channels=n_frames)
         physical = True; latent_dim = 4; label = "ego (gray-box)"
     elif name == "grounded":
         from models.grounded import GroundedJEPA
-        model = GroundedJEPA(grid_size=g, latent_dim=C.LATENT_DIM, block_dim=4, dt=a.dt, learn_coeffs=True, residual_mode=a.residual)
+        model = GroundedJEPA(grid_size=g, latent_dim=C.LATENT_DIM, block_dim=4, dt=a.dt, learn_coeffs=True, residual_mode=a.residual, in_channels=n_frames)
         physical = True; latent_dim = C.LATENT_DIM; label = "grounded"
     elif name == "jepa":
         from models.jepa import JEPA
-        model = JEPA(grid_size=g, latent_dim=C.LATENT_DIM, predictor_mode="residual", state_head=True)
+        model = JEPA(grid_size=g, latent_dim=C.LATENT_DIM, predictor_mode="residual", state_head=True, in_channels=n_frames)
         physical = False; latent_dim = C.LATENT_DIM; label = "residual JEPA (probe)"
     else:
         raise ValueError(f"unknown neural model {name!r}")
 
-    sd = torch.load(a.ckpt_for(name), map_location=dev, weights_only=True)
     model.load_state_dict(sd, strict=False)
     model = model.to(dev).eval()
+    if n_frames > 1:
+        print(f"  [{label}] history checkpoint: stacking {n_frames} frames at control time")
 
     # decode_pose un-standardizes JEPA's readout with the model's pose_mean/std buffers. Archived
     # checkpoints predate those buffers (they load as the 0/1 default), so back-fill them from the
@@ -107,8 +113,8 @@ def build_neural(name, a):
             states = torch.from_numpy(f["states"][:]).float()
         model.set_pose_stats(*pose_stats(states))
 
-    def to_frame(frame):
-        return torch.from_numpy(np.asarray(frame, np.float32)).view(1, 1, g, g).to(dev)
+    def to_frame(frames):                              # frames: (g,g) single or (n_frames,g,g) stack -> (1,n_frames,g,g)
+        return torch.from_numpy(np.asarray(frames, np.float32)).view(1, n_frames, g, g).to(dev)
 
     def full_action(A):                               # -> (K,2)=[v,omega] torch
         if a.plan_speed:                              # A is already (K,2)=[v,omega]
@@ -133,7 +139,7 @@ def build_neural(name, a):
         z = torch.from_numpy(S.astype(np.float32)).to(dev)
         return pose_from_xycs(model.decode_pose(z).cpu().numpy())
 
-    return observe, dynamics, pose, latent_dim, label
+    return observe, dynamics, pose, latent_dim, label, n_frames
 
 
 def make_costs(pose_fn, y_c, half, a):
@@ -159,12 +165,12 @@ def make_costs(pose_fn, y_c, half, a):
 
 
 def build_one(name, a):
-    observe, dynamics, pose, d, label = (build_unicycle(a) if name == "unicycle" else build_neural(name, a))
-    return observe, dynamics, pose, label
+    observe, dynamics, pose, d, label, n_frames = (build_unicycle(a) if name == "unicycle" else build_neural(name, a))
+    return observe, dynamics, pose, label, n_frames
 
 
 def roll_episode(built, a, y_c, half):
-    observe, dynamics, pose, label = built
+    observe, dynamics, pose, label, n_frames = built
     running, terminal = make_costs(pose, y_c, half, a)
     rng = np.random.default_rng(a.seed)
     if a.plan_speed:                                   # 2-D action [v, omega]: MPPI also plans speed
@@ -180,9 +186,14 @@ def roll_episode(built, a, y_c, half):
         a_nom[:, 0] = a.v_ref                          # warm-start the speed channel at the reference (not 0)
     traj = [true.copy()]
     pred_peak = 0.0                                     # largest |lat| the MODEL ever predicted for a committed plan
+    frame_hist = deque(maxlen=n_frames)                # last n_frames rendered frames (for history checkpoints)
     for _ in range(a.steps):
         frame = render_frame(true, grid_size=a.grid_size, marker=a.marker)
-        s0 = observe(true, frame)                      # model's estimate of the current state
+        if not frame_hist:                             # cold start: pad the buffer with the first frame
+            frame_hist.extend([frame] * n_frames)
+        else:
+            frame_hist.append(frame)
+        s0 = observe(true, np.stack(frame_hist))       # model's estimate of the current state (oldest..newest)
         a_nom, _ = mppi_plan(s0, a_nom, dynamics, running, terminal,
                              n_samples=a.samples, sigma=sigma, lam=a.lam,
                              a_low=a_low, a_high=a_high, rng=rng)
