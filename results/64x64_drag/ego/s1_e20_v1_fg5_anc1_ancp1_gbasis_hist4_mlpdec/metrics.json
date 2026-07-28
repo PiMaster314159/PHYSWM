@@ -16,5 +16,14 @@
   "dynamics": {
     "pred_pos_err": 0.02065253975269396,
     "pred_theta_mae_deg": 1.456639863150984
+  },
+  "mpc": {
+    "final_lat": 0.03859038678902449,
+    "final_head_deg": 2.4621533597298324,
+    "max_excursion": 0.04744765165878828,
+    "rms_lat": 0.03956449169138805,
+    "in_bounds": true,
+    "mean_speed": 0.20116221890772892,
+    "speed_err": 0.0011622189077289125
   }
 }
