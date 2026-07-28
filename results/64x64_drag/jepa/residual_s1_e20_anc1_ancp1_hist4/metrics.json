@@ -1,0 +1,12 @@
+{
+  "model": "jepa",
+  "run": "64x64_drag",
+  "tag": "residual_s1_e20_anc1_ancp1_hist4",
+  "pose": {
+    "theta_mae_deg": 11.991229057312012,
+    "theta_flip_pct": 0.0,
+    "x_r2": 0.9938516616821289,
+    "y_r2": 0.9972594976425171,
+    "pos_rmse": 0.02106749825179577
+  }
+}
