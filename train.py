@@ -187,7 +187,9 @@ def val_pred(model, dl, device, max_batches=50):
 def train_standard(model, a, data_path, ckpt_path, report_dir):
     device, weights = a.device, build_weights(a)
     need_state = a.lam_anchor > 0 or a.lam_anchor_pred > 0
-    if a.model == "jepa" and need_state:      # bake pose stats so decode_pose is real-unit + readout standardizes
+    # bake pose stats for jepa (decode_pose readout) AND for any bicycle model (so the pose loss STANDARDIZES:
+    # otherwise raw MSE lets the O(1) heading dims drown out the O(0.1) velocity dim -> v is barely learned)
+    if (a.model == "jepa" or getattr(a, "dynamics", "unicycle") == "bicycle") and need_state:
         stats_dl, _ = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED, return_state=True, step=a.pred_step)
         _vel = getattr(stats_dl.dataset, 'velocities', None)   # bicycle: standardize v too
         _velt = torch.from_numpy(_vel).float() if _vel is not None else None
@@ -225,7 +227,7 @@ def train_rollout(model, a, data_path, ckpt_path, report_dir):
     so the optimizer gets real multi-step gradient the single-step loss can't provide -- the term meant to
     sharpen the predictor and, we hope, help JEPA."""
     device = a.device
-    if a.model == "jepa" and (a.lam_anchor > 0 or a.lam_anchor_pred > 0):   # bake pose stats (as in train_standard)
+    if (a.model == "jepa" or getattr(a, "dynamics", "unicycle") == "bicycle") and (a.lam_anchor > 0 or a.lam_anchor_pred > 0):   # standardize pose loss (see train_standard)
         stats_dl, _ = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED, return_state=True, step=a.pred_step)
         _vel = getattr(stats_dl.dataset, 'velocities', None)   # bicycle: standardize v too
         _velt = torch.from_numpy(_vel).float() if _vel is not None else None
