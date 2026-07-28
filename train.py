@@ -144,6 +144,7 @@ def build_tag(a):
     if a.lam_anchor_pred > 0: tag += f"_ancp{a.lam_anchor_pred:g}"
     if a.model in ("ego", "grounded") and a.learn_coeffs: tag += "_learn"
     if a.model in ("ego", "grounded") and a.residual != "none": tag += f"_g{a.residual}"   # gbasis / gmlp (distinct ablation ckpts)
+    if a.rollout_k > 1 and a.model != "ego": tag += f"_roll{a.rollout_k}"   # ego adds this in its own branch
     if a.model == "ego": tag += "_bc" if a.decoder == "broadcast" else "_mlpdec"   # decoder token last
     if a.note: tag += f"_{a.note}"
     return tag
@@ -202,13 +203,22 @@ def train_standard(model, a, data_path, ckpt_path, report_dir):
 
 
 def train_rollout(model, a, data_path, ckpt_path, report_dir):
-    """Ego-only multi-step rollout training: encode frame_0, roll K steps, anchor every step."""
+    """Model-agnostic multi-step rollout training: encode frame_0, roll K steps, supervise decoded pose
+    at every horizon (via WorldModel.rollout_loss). A wrong dynamics parameter compounds across the roll,
+    so the optimizer gets real multi-step gradient the single-step loss can't provide -- the term meant to
+    sharpen the predictor and, we hope, help JEPA."""
     device = a.device
+    if a.model == "jepa" and (a.lam_anchor > 0 or a.lam_anchor_pred > 0):   # bake pose stats (as in train_standard)
+        stats_dl, _ = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED, return_state=True, step=a.pred_step)
+        mean, std = pose_stats(torch.from_numpy(stats_dl.dataset.states).float())
+        model.set_pose_stats(mean.to(device), std.to(device))
     train_dl, val_dl = make_rollout_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
                                                 K=a.rollout_k, step=a.pred_step)
+    weights = build_weights(a); weights["rollout"] = a.lam_rollout
     print(f"rollout training: K={a.rollout_k} transitions  ({len(train_dl.dataset)} windows)")
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
     best, step, hist = float("inf"), 0, []
+    to_dev = lambda b: {k: v.to(device) for k, v in b.items()}
 
     @torch.no_grad()
     def rollout_val(dl, max_batches=50):
@@ -216,26 +226,22 @@ def train_rollout(model, a, data_path, ckpt_path, report_dir):
         for i, b in enumerate(dl):
             if i >= max_batches:
                 break
-            _, parts = ego_rollout_loss(model, b["frame"].to(device), b["actions"].to(device),
-                                        b["poses"].to(device), a.lam_recon, a.lam_anchor, a.lam_rollout, a.recon_fg_weight)
-            tot.append(parts["total"])
+            _, parts = model.rollout_loss(to_dev(b), weights); tot.append(parts["total"])
         model.train()
         return sum(tot) / max(len(tot), 1)
 
     for epoch in range(a.epochs):
         for b in train_dl:
-            loss, parts = ego_rollout_loss(model, b["frame"].to(device), b["actions"].to(device),
-                                           b["poses"].to(device), a.lam_recon, a.lam_anchor, a.lam_rollout, a.recon_fg_weight)
+            loss, parts = model.rollout_loss(to_dev(b), weights)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             opt.step(); step += 1
             if step % 50 == 0:
-                row = {"step": step, "epoch": epoch + 1, **parts,
-                       "a_v": model.log_a_v.exp().item(), "a_omega": model.log_a_omega.exp().item()}
+                row = {"step": step, "epoch": epoch + 1, **parts}
+                if hasattr(model, "log_a_v"): row["a_v"] = model.log_a_v.exp().item()
                 hist.append(row)
-                print(f"  step {step:5d}  total {parts['total']:.4f}  recon {parts['recon']:.4f}  "
-                      f"anchor {parts['anchor']:.4f}  rollout {parts['rollout']:.4f}  "
-                      f"a_v {row['a_v']:.3f}  a_omega {row['a_omega']:.3f}")
+                extras = "  ".join(f"{k} {parts[k]:.4f}" for k in parts if k not in ("step", "epoch", "total"))
+                print(f"  step {step:5d}  total {parts['total']:.4f}  {extras}")
         v = rollout_val(val_dl)
         print(f"epoch {epoch+1}/{a.epochs}  val total {v:.4f}")
         if v < best:
@@ -279,7 +285,7 @@ def main():
 
     torch.manual_seed(C.SEED)
     model = build_model(a).to(a.device).train()
-    if a.model == "ego" and a.rollout_k > 1:
+    if a.rollout_k > 1:                                # multi-step rollout training (any model)
         train_rollout(model, a, data_path, ckpt_path, report_dir)
     else:
         train_standard(model, a, data_path, ckpt_path, report_dir)

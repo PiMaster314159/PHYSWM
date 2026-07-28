@@ -1,6 +1,6 @@
 """Shared world-model interface + the pose-supervision loss family."""
 import torch, torch.nn as nn, torch.nn.functional as F
-from models.components import standardize, unstandardize
+from models.components import standardize, unstandardize, state_to_target
 
 class WorldModel(nn.Module):
     def __init__(self):
@@ -45,6 +45,35 @@ class WorldModel(nn.Module):
                                             weights.get("anchor_pred", 0.0))   # shared
         total = rep + pose
         parts.update(pparts); parts["total"] = total.item()
+        return total, parts
+
+    def rollout_loss(self, batch, weights) -> tuple:
+        """Model-agnostic K-step rollout training. Encode frame_0 ONCE, roll predict() over the K held
+        actions, and supervise decode_pose at EVERY horizon (standardized, so ego/grounded/jepa all work).
+        The first transition also carries the model's full single-step loss (representation grounding +
+        1-step pose) via next_frame, so the encoder stays grounded / uncollapsed. Because a wrong dynamics
+        parameter COMPOUNDS over the roll, the optimizer gets multi-step gradient the single-step loss
+        can't give -- the term meant to sharpen the predictor (and, we hope, rescue JEPA).
+
+        batch: frame (B,1,H,W) · next_frame (B,1,H,W) · actions (B,K,2) · poses (B,K+1,3)
+        """
+        frame0, next_frame0 = batch["frame"], batch["next_frame"]
+        actions, poses = batch["actions"], batch["poses"]
+        K = actions.shape[1]
+        out = self.forward(frame0, actions[:, 0], next_frame0)                    # first transition
+        b0 = {"frame": frame0, "next_frame": next_frame0,
+              "s_target": state_to_target(poses[:, 0]), "s_next_target": state_to_target(poses[:, 1])}
+        total, parts = self.loss(out, b0, weights)                               # grounding + 1-step pose
+        m, s = self.pose_mean, self.pose_std
+        z = out["pred_next_z"]; roll = z.new_zeros(())
+        for k in range(1, K):                                                    # keep rolling from the prediction
+            z = self.predict(z, actions[:, k])
+            roll = roll + F.mse_loss(standardize(self.decode_pose(z), m, s),
+                                     standardize(state_to_target(poses[:, k + 1]), m, s))
+        if K > 1:
+            roll = roll / (K - 1)
+            total = total + weights.get("rollout", 1.0) * roll
+            parts["rollout"] = roll.item(); parts["total"] = total.item()
         return total, parts
 
     def set_pose_stats(self, mean, std):                    # JEPA calls this at train time

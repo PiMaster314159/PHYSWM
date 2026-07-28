@@ -179,9 +179,10 @@ class RolloutWindows(Dataset):
     def __getitem__(self, idx: int) -> dict:
         b, step, K = int(self.index[idx]), self.step, self.K
         frame = torch.from_numpy(self.frames[b]).to(torch.float32).unsqueeze(0)
+        next_frame = torch.from_numpy(self.frames[b + step]).to(torch.float32).unsqueeze(0)   # after action_0
         acts  = torch.stack([torch.from_numpy(self.actions[b + k * step]).to(torch.float32) for k in range(K)])
         poses = torch.stack([torch.from_numpy(self.states[b + k * step]).to(torch.float32) for k in range(K + 1)])
-        return {"frame": frame, "actions": acts, "poses": poses}
+        return {"frame": frame, "next_frame": next_frame, "actions": acts, "poses": poses}
 
 
 def make_rollout_dataloaders(
