@@ -15,7 +15,7 @@
 
 import numpy as np
 import numpy.typing as npt
-from config import DT
+from config import DT, WHEELBASE
 
 
 # ## Angle wrapping
@@ -130,8 +130,50 @@ def step(state: npt.ArrayLike, action: npt.ArrayLike, dt: float = DT) -> np.ndar
     return np.array([x_new, y_new, theta_new])
 
 
+# # Bicycle / throttle dynamics
+#
+# Kinematic bicycle with a throttle. Unlike the unicycle, VELOCITY IS A STATE (it integrates the throttle),
+# so state grows to (x, y, theta, v) and the action becomes (a, delta) = (acceleration, steering angle).
+# Because v is a hidden state, it is NOT visible in a single rendered frame -> the model must infer it from
+# the last few frames (history). At v=0 the car cannot turn (yaw rate scales with speed), a real bicycle trait.
+#
+#   v_new     = clip(v + (gain*a - drag_c*v^2) * dt, v_min, v_max)   throttle: your v_dot = a, + optional aero drag
+#   theta_new = wrap(theta + (v_new / L) * tan(delta) * dt)          steering: yaw rate = v/L * tan(delta)
+#   x_new     = x + v_new * cos(theta_new) * dt
+#   y_new     = y + v_new * sin(theta_new) * dt
+# Semi-implicit (v -> theta -> position), matching the unicycle step.
+
+
+def bicycle_step(state: npt.ArrayLike, action: npt.ArrayLike, dt: float = DT,
+                 wheelbase: float = WHEELBASE, drag_c: float = 0.0, gain: float = 1.0,
+                 v_min: float = 0.0, v_max: float = None) -> np.ndarray:
+    """One kinematic-bicycle-with-throttle step.
+
+    state  : (x, y, theta, v)         velocity v is a STATE (integrates the throttle)
+    action : (a, delta)               a = commanded acceleration (throttle), delta = steering angle (rad)
+    drag_c : v_dot = gain*a - drag_c*v^2   (drag_c=0 -> your prof's clean v_dot = a; >0 -> aero drag on velocity)
+    Returns (x, y, theta, v) with theta wrapped to [-pi, pi).
+    """
+    state = np.asarray(state, dtype=float)
+    action = np.asarray(action, dtype=float)
+    if state.shape != (4,):
+        raise ValueError(f"bicycle state must have shape (4,) = (x,y,theta,v), got {state.shape}")
+    if action.shape != (2,):
+        raise ValueError(f"bicycle action must have shape (2,) = (a,delta), got {action.shape}")
+
+    x, y, theta, v = state
+    a, delta = action
+    v_new = v + (gain * a - drag_c * v * v) * dt          # throttle -> velocity (semi-implicit: use v_new below)
+    v_new = max(v_min, v_new) if v_min is not None else v_new
+    v_new = min(v_max, v_new) if v_max is not None else v_new
+    theta_new = wrap_theta(theta + (v_new / wheelbase) * np.tan(delta) * dt)   # yaw rate scales with speed
+    x_new = x + v_new * np.cos(theta_new) * dt
+    y_new = y + v_new * np.sin(theta_new) * dt
+    return np.array([x_new, y_new, theta_new, v_new])
+
+
 # ## Multi-step rollout
-# 
+#
 # Convenience wrapper. Takes a sequence of actions and returns the full state trajectory, shape `(T+1, 3)`.
 
 

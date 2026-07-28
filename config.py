@@ -52,6 +52,7 @@ SEED = 0
 # values, so changing them invalidates existing datasets. Treat a change as
 # needing a fresh RUN and re-collection, not an in-place tweak.
 DT = 0.1                                 # simulation timestep
+WHEELBASE = 0.10                         # bicycle-model wheelbase (world units): yaw rate = v/WHEELBASE * tan(delta)
 L = 0.12                                 # triangle length (altitude) in world units
 W = 0.06                                 # triangle base width in world units
 WORLD_BOUNDS = ((0.0, 1.0), (0.0, 1.0))  # ((x_min, x_max), (y_min, y_max))

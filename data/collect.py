@@ -34,10 +34,11 @@ from typing import Optional, Union
 from config import (
     DT, WORLD_BOUNDS, V_MEAN, V_STD, OMEGA_MEAN, OMEGA_STD,
     GRID_SIZE, HOLD_K, MAX_STEPS, N_EPISODES, SEED, RENDER_MARKER, NOSE_RADIUS,
-    ACTUATOR_GAIN,
+    ACTUATOR_GAIN, WHEELBASE,
 )
 from sim.render import render_frame
-from sim.environment import env_step, bounding_radius
+from sim.environment import env_step, bounding_radius, out_of_bounds
+from sim.dynamics import bicycle_step, wrap_theta
 from sim.visualize import show_frame_strip, show_trajectory
 
 
@@ -260,8 +261,84 @@ def run_episode(
     )
 
 
+# ## Bicycle / throttle episode
+#
+# Kinematic bicycle with a throttle. Action is (a, delta) = (acceleration, steering angle); VELOCITY is a
+# hidden STATE (integrates a), so it never appears in a single frame -- the model must read it off the last
+# few frames (history). A target-speed controller drives v toward a resampled cruise target (clean speed
+# coverage); steering wanders in the interior and turns back toward center near the walls (long episodes).
+# We store the true velocity in its own array so eval can check whether the model RECOVERED speed.
+
+
+def run_bicycle_episode(
+    rng: np.random.Generator,
+    max_steps: int = 500,
+    grid_size: int = GRID_SIZE,
+    world_bounds: tuple = WORLD_BOUNDS,
+    dt: float = DT,
+    hold_k: int = 4,
+    v_mean: float = V_MEAN,
+    v_std: float = V_STD,
+    v_max: float = 0.6,
+    a_max: float = 1.5,
+    kp_a: float = 3.0,
+    delta_std: float = 0.4,
+    delta_max: float = 0.6,
+    k_center: float = 1.5,
+    wheelbase: float = WHEELBASE,
+    marker: str = RENDER_MARKER,
+    nose_radius: float = NOSE_RADIUS,
+) -> tuple:
+    """One bicycle-with-throttle episode. Returns (frames, states(x,y,theta), actions(a,delta), termination,
+    velocities(v)). Velocity is the hidden state; it is returned separately for eval, never rendered."""
+    frame_dtype = np.uint8 if marker == "none" else np.float32
+
+    def _render(pose):
+        return render_frame(pose, grid_size=grid_size, marker=marker, nose_radius=nose_radius).astype(frame_dtype)
+
+    (x_min, x_max), (y_min, y_max) = world_bounds
+    cx, cy = 0.5 * (x_min + x_max), 0.5 * (y_min + y_max)
+    half = 0.5 * min(x_max - x_min, y_max - y_min)
+
+    pose0 = sample_initial_state(rng, world_bounds=world_bounds)
+    v0 = float(np.clip(rng.normal(v_mean, v_std), 0.0, v_max))     # start at a plausible cruise speed
+    state = np.array([pose0[0], pose0[1], pose0[2], v0], float)    # (x, y, theta, v)
+    states, vels, frames, actions = [state[:3].copy()], [state[3]], [_render(state[:3])], []
+    termination = "timeout"
+
+    def _targets():
+        return (float(np.clip(rng.normal(v_mean, v_std), 0.0, v_max)),
+                float(np.clip(rng.normal(0.0, delta_std), -delta_max, delta_max)))
+    v_tgt, delta_rand = _targets()
+    held = 0
+
+    for _ in range(max_steps - 1):
+        if held >= hold_k:
+            v_tgt, delta_rand = _targets(); held = 0
+        x, y, theta, v = state
+        a = float(np.clip(kp_a * (v_tgt - v), -a_max, a_max))       # throttle -> drive v toward target
+        r = np.hypot(x - cx, y - cy) / half                        # steering: wander inside, turn back at walls
+        if r > 0.6:
+            head_err = wrap_theta(np.arctan2(cy - y, cx - x) - theta)
+            delta = float(np.clip(k_center * head_err, -delta_max, delta_max))
+        else:
+            delta = delta_rand
+        action = np.array([a, delta], float)
+        actions.append(action); held += 1
+        nxt = bicycle_step(state, action, dt=dt, wheelbase=wheelbase, drag_c=0.0, v_min=0.0, v_max=v_max)
+        if out_of_bounds(nxt[:3], world_bounds=world_bounds):
+            termination = "wall"; break
+        state = nxt
+        states.append(state[:3].copy()); vels.append(state[3]); frames.append(_render(state[:3]))
+
+    if len(actions) < len(states):
+        actions.append(np.array([0.0, 0.0], float))
+    return (np.asarray(frames, frame_dtype), np.asarray(states, np.float32),
+            np.asarray(actions, np.float32), termination, np.asarray(vels, np.float32))
+
+
 # ## Sanity check: 10 episodes
-# 
+#
 # Run 10 episodes, print lengths and termination reasons, then plot all 10 trajectories. Look for: (1) varied start poses, (2) episodes that don't all die on step 1, (3) smooth curves rather than noise.
 
 
@@ -323,6 +400,11 @@ def collect_dataset(
     actuator_gain: float = ACTUATOR_GAIN,
     gain_range: tuple = None,
     drag_c: float = 0.0,
+    dynamics: str = "unicycle",
+    v_max: float = 0.6,
+    a_max: float = 1.5,
+    delta_max: float = 0.6,
+    wheelbase: float = WHEELBASE,
     progress_every: int = 100,
 ) -> None:
     """Stream `n_episodes` random-action episodes to an HDF5 file.
@@ -390,6 +472,11 @@ def collect_dataset(
             "gains", shape=(0,), maxshape=(None,),
             dtype="float32", chunks=(512,),
         )
+        velocities_ds = None
+        if dynamics == "bicycle":      # true (hidden) speed per step -- eval-only; the model must infer it
+            velocities_ds = f.create_dataset(
+                "velocities", shape=(0,), maxshape=(None,), dtype="float32", chunks=(512,),
+            )
 
         episode_starts = []
         episode_lengths = []
@@ -401,15 +488,23 @@ def collect_dataset(
             # per-episode actuator gain: a fresh draw from gain_range each episode (the hidden
             # parameter the model must infer), or the fixed actuator_gain when range is None.
             ep_gain = float(rng.uniform(*gain_range)) if gain_range is not None else actuator_gain
-            frames, states, actions, termination = run_episode(
-                rng,
-                max_steps=max_steps, grid_size=grid_size,
-                world_bounds=world_bounds, dt=dt, hold_k=hold_k,
-                v_mean=v_mean, v_std=v_std,
-                omega_mean=omega_mean, omega_std=omega_std,
-                marker=marker, nose_radius=nose_radius,
-                actuator_gain=ep_gain, drag_c=drag_c,
-            )
+            velocities = None
+            if dynamics == "bicycle":
+                frames, states, actions, termination, velocities = run_bicycle_episode(
+                    rng, max_steps=max_steps, grid_size=grid_size, world_bounds=world_bounds, dt=dt,
+                    hold_k=hold_k, v_mean=v_mean, v_std=v_std, v_max=v_max, a_max=a_max,
+                    delta_max=delta_max, wheelbase=wheelbase, marker=marker, nose_radius=nose_radius,
+                )
+            else:
+                frames, states, actions, termination = run_episode(
+                    rng,
+                    max_steps=max_steps, grid_size=grid_size,
+                    world_bounds=world_bounds, dt=dt, hold_k=hold_k,
+                    v_mean=v_mean, v_std=v_std,
+                    omega_mean=omega_mean, omega_std=omega_std,
+                    marker=marker, nose_radius=nose_radius,
+                    actuator_gain=ep_gain, drag_c=drag_c,
+                )
             if len(states) < min_length:
                 continue
 
@@ -419,6 +514,9 @@ def collect_dataset(
                 ds[-L:] = block
             gains_ds.resize(gains_ds.shape[0] + L, axis=0)
             gains_ds[-L:] = np.full(L, ep_gain, dtype=np.float32)
+            if velocities_ds is not None:
+                velocities_ds.resize(velocities_ds.shape[0] + L, axis=0)
+                velocities_ds[-L:] = velocities
 
             episode_starts.append(total)
             episode_lengths.append(L)
@@ -445,6 +543,12 @@ def collect_dataset(
         f.attrs["nose_radius"] = nose_radius
         f.attrs["actuator_gain"] = actuator_gain   # truth for the gray-box test: model's a_v should recover this
         f.attrs["drag_c"] = drag_c                  # aerodynamic drag coefficient (applied v -= drag_c * v^2)
+        f.attrs["dynamics"] = dynamics              # "unicycle" (action v,omega) or "bicycle" (action a,delta; v hidden)
+        if dynamics == "bicycle":
+            f.attrs["wheelbase"] = wheelbase
+            f.attrs["v_max"] = v_max
+            f.attrs["a_max"] = a_max
+            f.attrs["delta_max"] = delta_max
         # per-episode gain range (the hidden parameter the model must infer); equal bounds = fixed gain
         f.attrs["gain_lo"] = float(gain_range[0]) if gain_range is not None else actuator_gain
         f.attrs["gain_hi"] = float(gain_range[1]) if gain_range is not None else actuator_gain
