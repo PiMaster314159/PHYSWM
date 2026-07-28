@@ -51,6 +51,9 @@ def parse_args():
     p.add_argument("--latent-dim", type=int, default=C.LATENT_DIM)
     p.add_argument("--pred-step", type=int, default=C.PRED_STEP)
     p.add_argument("--epochs", type=int, default=C.EPOCHS)
+    p.add_argument("--steps-per-epoch", type=int, default=0,
+                   help="cap batches per epoch (0 = full epoch). Shuffled, so each epoch sees a fresh random "
+                        "subset -- use on big datasets to get frequent val/checkpoints without ~4k steps/epoch")
     p.add_argument("--lr", type=float, default=C.LR)
     p.add_argument("--batch-size", type=int, default=C.BATCH_SIZE)
     p.add_argument("--probe-epochs", type=int, default=40)
@@ -196,7 +199,9 @@ def train_standard(model, a, data_path, ckpt_path, report_dir):
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
     best, step, hist = float("inf"), 0, []
     for epoch in range(a.epochs):
-        for b in train_dl:
+        for i, b in enumerate(train_dl):
+            if a.steps_per_epoch and i >= a.steps_per_epoch:   # cap epoch length on big datasets
+                break
             out = model(b["frame"].to(device), b["action"].to(device), b["next_frame"].to(device))
             loss, parts = model.loss(out, loss_batch(b, need_state, device), weights)
             opt.zero_grad(); loss.backward()
@@ -245,7 +250,9 @@ def train_rollout(model, a, data_path, ckpt_path, report_dir):
         return sum(tot) / max(len(tot), 1)
 
     for epoch in range(a.epochs):
-        for b in train_dl:
+        for i, b in enumerate(train_dl):
+            if a.steps_per_epoch and i >= a.steps_per_epoch:   # cap epoch length on big datasets
+                break
             loss, parts = model.rollout_loss(to_dev(b), weights)
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
