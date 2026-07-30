@@ -54,6 +54,9 @@ def parse_args():
     p.add_argument("--steps-per-epoch", type=int, default=0,
                    help="cap batches per epoch (0 = full epoch). Shuffled, so each epoch sees a fresh random "
                         "subset -- use on big datasets to get frequent val/checkpoints without ~4k steps/epoch")
+    p.add_argument("--eval-only", action="store_true",
+                   help="skip training: load the existing checkpoint for this tag and just run eval "
+                        "(recover metrics after a crash). Pass the SAME flags you trained with so the tag matches")
     p.add_argument("--lr", type=float, default=C.LR)
     p.add_argument("--batch-size", type=int, default=C.BATCH_SIZE)
     p.add_argument("--probe-epochs", type=int, default=40)
@@ -313,7 +316,12 @@ def main():
 
     torch.manual_seed(C.SEED)
     model = build_model(a).to(a.device).train()
-    if a.rollout_k > 1:                                # multi-step rollout training (any model)
+    if a.eval_only:                                   # recover metrics from an existing checkpoint (no training)
+        if not ckpt_path.exists():
+            raise SystemExit(f"--eval-only: checkpoint not found: {ckpt_path}\n(pass the SAME flags you trained with so the tag matches)")
+        print(f"eval-only: loading {ckpt_path.name}")
+        report_dir.mkdir(parents=True, exist_ok=True)
+    elif a.rollout_k > 1:                              # multi-step rollout training (any model)
         train_rollout(model, a, data_path, ckpt_path, report_dir)
     else:
         train_standard(model, a, data_path, ckpt_path, report_dir)
