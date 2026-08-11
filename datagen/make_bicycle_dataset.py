@@ -34,6 +34,8 @@ def main():
     p.add_argument("--v-max", type=float, default=0.6, help="speed clamp")
     p.add_argument("--a-max", type=float, default=1.5, help="acceleration (throttle) magnitude limit")
     p.add_argument("--delta-max", type=float, default=0.6, help="steering-angle limit (rad)")
+    p.add_argument("--drag-c", type=float, default=0.0,
+                   help="UNMODELED aero drag on velocity: v_dot = a - drag_c*v^2 (Stage 2a). 0 = exact bicycle")
     p.add_argument("--wheelbase", type=float, default=C.WHEELBASE)
     p.add_argument("--n-episodes", type=int, default=C.N_EPISODES)
     p.add_argument("--seed", type=int, default=C.SEED)
@@ -41,10 +43,10 @@ def main():
 
     out = C.DATASETS_DIR / f"{a.name}.h5"
     print(f"collecting {a.n_episodes} bicycle episodes -> {out}  (marker=ring, grid={a.grid_size}, "
-          f"v_mean={a.v_mean}, v_std={a.v_std}, v_max={a.v_max}, wheelbase={a.wheelbase}, NO drag)")
+          f"v_mean={a.v_mean}, v_std={a.v_std}, v_max={a.v_max}, wheelbase={a.wheelbase}, drag_c={a.drag_c})")
     collect_dataset(out, n_episodes=a.n_episodes, grid_size=a.grid_size, marker="ring",
                     dynamics="bicycle", v_mean=a.v_mean, v_std=a.v_std, v_max=a.v_max,
-                    a_max=a.a_max, delta_max=a.delta_max, wheelbase=a.wheelbase, seed=a.seed)
+                    a_max=a.a_max, delta_max=a.delta_max, wheelbase=a.wheelbase, drag_c=a.drag_c, seed=a.seed)
 
 
 if __name__ == "__main__":

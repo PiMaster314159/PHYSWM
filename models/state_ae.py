@@ -134,7 +134,7 @@ class EgoWorldModel(WorldModel):
             self.register_buffer("log_a_omega", torch.zeros(()))
         # higher-order gray-box residual on the dynamics; toggle with residual_mode. Ego has no free
         # latent, so a 'basis' residual uses global scalar coefficients and an 'mlp' one is unconditioned.
-        self.residual = make_residual(residual_mode, dt, residual_budget, free_dim=0)
+        self.residual = make_residual(residual_mode, dt, residual_budget, free_dim=0, dynamics=dynamics)
 
     def encode(self, frame: torch.Tensor) -> torch.Tensor:
         return self.encoder(frame)

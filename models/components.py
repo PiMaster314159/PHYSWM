@@ -266,27 +266,89 @@ class MLPResidual(nn.Module):
     (x, y are deliberately excluded so the correction is translation-invariant, exactly like the
     structured one.) Zero-init on the last layer -> the residual starts as identity.
     """
-    def __init__(self, dt, budget=0.1, free_dim=0, hidden=64):
+    def __init__(self, dt, budget=0.1, free_dim=0, hidden=64, out_dim=4):
         super().__init__()
-        self.dt, self.budget, self.free_dim = dt, budget, free_dim
-        self.net = mlp([4 + free_dim, hidden, hidden, 4])          # [cos, sin, v, w] (+ free) -> Δpose
+        self.dt, self.budget, self.free_dim, self.out_dim = dt, budget, free_dim, out_dim
+        in_dim = 5 if out_dim == 5 else 4                          # bicycle: cos,sin,v,a,δ ; unicycle: cos,sin,v,ω
+        self.net = mlp([in_dim + free_dim, hidden, hidden, out_dim])
         nn.init.zeros_(self.net[-1].weight); nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, pose, action, free=None):
         cos, sin = pose[:, 2:3], pose[:, 3:4]
-        v, w = action[:, 0:1], action[:, 1:2]
-        feats = [cos, sin, v, w] + ([free] if self.free_dim > 0 else [])
-        return self.budget * torch.tanh(self.net(torch.cat(feats, dim=1)))   # (B, 4) bounded correction
+        if self.out_dim == 5:                                     # bicycle: heading, velocity STATE, (a, δ)
+            feats = [cos, sin, pose[:, 4:5], action[:, 0:1], action[:, 1:2]]
+        else:                                                    # unicycle: heading, (v, ω)
+            feats = [cos, sin, action[:, 0:1], action[:, 1:2]]
+        if self.free_dim > 0:
+            feats.append(free)
+        return self.budget * torch.tanh(self.net(torch.cat(feats, dim=1)))   # (B, out_dim) bounded correction
 
     def l1(self):
         return self.net[0].weight.abs().mean()   # parity with StructuredResidual.l1(): keep the correction small
 
 
-def make_residual(mode, dt, budget, free_dim):
-    """Factory shared by ego + grounded: 'basis' -> StructuredResidual, 'mlp' -> MLPResidual, else None."""
+class BicycleResidual(nn.Module):
+    """Physics-basis residual for the 5-D bicycle block [x,y,cosθ,sinθ,v], action (a, δ). Captures the
+    unmodeled effects the EXACT kinematic bicycle misses: aero drag (−v² on velocity), rolling resistance
+    (−v), understeer/slip (heading). Basis φ(v,a,δ) = [1, v, v², a, δ, v·δ]; two channels — a VELOCITY
+    correction and a HEADING correction — with global coeffs (ego) or latent-modulated coeffs (grounded's
+    free dims). Bounded, zero-init, L1-sparse. Output is a 5-D correction added to the exact next block.
+    Drag reads out as a NEGATIVE v² coefficient on the 'velocity' channel."""
+    _BASIS = ["1", "v", "v^2", "a", "delta", "v*delta"]
+    _CHANNELS = ["velocity", "heading"]
+
+    def __init__(self, dt, budget=0.1, free_dim=0):
+        super().__init__()
+        self.dt, self.budget, self.free_dim = dt, budget, free_dim
+        self.n_basis = len(self._BASIS)
+        if free_dim > 0:
+            self.coef_head = nn.Linear(free_dim, 2 * self.n_basis)
+            nn.init.zeros_(self.coef_head.weight); nn.init.zeros_(self.coef_head.bias)
+        else:
+            self.coef = nn.Parameter(torch.zeros(2, self.n_basis))
+
+    def _basis(self, v, a, delta):
+        return torch.cat([torch.ones_like(v), v, v * v, a, delta, v * delta], dim=-1)   # (B, 6)
+
+    def forward(self, state, action, free=None):
+        cos, sin, v = state[:, 2:3], state[:, 3:4], state[:, 4:5]
+        a, delta = action[:, 0:1], action[:, 1:2]
+        Phi = self._basis(v, a, delta)
+        if self.free_dim > 0:
+            c = self.coef_head(free).view(-1, 2, self.n_basis)
+            raw = (c * Phi.unsqueeze(1)).sum(-1)          # (B, 2)  latent-modulated
+        else:
+            raw = Phi @ self.coef.t()                     # (B, 2)  global
+        d = self.budget * torch.tanh(raw)
+        g_v, g_th = d[:, 0:1], d[:, 1:2]                  # velocity + heading corrections
+        dcos = -sin * g_th * self.dt                      # slip: extra 1st-order heading rotation
+        dsin =  cos * g_th * self.dt
+        dx = g_v * cos * self.dt                          # the extra velocity moves along heading
+        dy = g_v * sin * self.dt
+        return torch.cat([dx, dy, dcos, dsin, g_v], dim=1)   # (B, 5) correction to add to the next block
+
+    def l1(self):
+        w = self.coef_head.weight if self.free_dim > 0 else self.coef
+        return w.abs().mean()
+
+    @torch.no_grad()
+    def named_coeffs(self, free=None):
+        if self.free_dim > 0:
+            if free is None:
+                raise ValueError("latent-modulated residual needs a free latent to evaluate coefficients")
+            c = self.coef_head(free).view(-1, 2, self.n_basis).mean(0)
+        else:
+            c = self.coef
+        return {ch: {self._BASIS[k]: c[i, k].item() for k in range(self.n_basis)} for i, ch in enumerate(self._CHANNELS)}
+
+
+def make_residual(mode, dt, budget, free_dim, dynamics="unicycle"):
+    """Factory shared by ego + grounded. 'basis' -> physics-basis residual (StructuredResidual for the
+    unicycle, BicycleResidual for the 5-D bicycle block); 'mlp' -> unstructured net of the right width; else None."""
     b = budget or 0.1
     if mode == "basis":
-        return StructuredResidual(dt, budget=b, free_dim=free_dim)
+        return BicycleResidual(dt, budget=b, free_dim=free_dim) if dynamics == "bicycle" \
+            else StructuredResidual(dt, budget=b, free_dim=free_dim)
     if mode == "mlp":
-        return MLPResidual(dt, budget=b, free_dim=free_dim)
+        return MLPResidual(dt, budget=b, free_dim=free_dim, out_dim=(5 if dynamics == "bicycle" else 4))
     return None

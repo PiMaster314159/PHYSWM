@@ -34,7 +34,7 @@ from typing import Optional, Union
 from config import (
     DT, WORLD_BOUNDS, V_MEAN, V_STD, OMEGA_MEAN, OMEGA_STD,
     GRID_SIZE, HOLD_K, MAX_STEPS, N_EPISODES, SEED, RENDER_MARKER, NOSE_RADIUS,
-    ACTUATOR_GAIN, WHEELBASE,
+    ACTUATOR_GAIN, WHEELBASE, FRAME_SCALE,
 )
 from sim.render import render_frame
 from sim.environment import env_step, bounding_radius, out_of_bounds
@@ -286,6 +286,7 @@ def run_bicycle_episode(
     delta_max: float = 0.6,
     k_center: float = 1.5,
     wheelbase: float = WHEELBASE,
+    drag_c: float = 0.0,
     marker: str = RENDER_MARKER,
     nose_radius: float = NOSE_RADIUS,
 ) -> tuple:
@@ -325,7 +326,7 @@ def run_bicycle_episode(
             delta = delta_rand
         action = np.array([a, delta], float)
         actions.append(action); held += 1
-        nxt = bicycle_step(state, action, dt=dt, wheelbase=wheelbase, drag_c=0.0, v_min=0.0, v_max=v_max)
+        nxt = bicycle_step(state, action, dt=dt, wheelbase=wheelbase, drag_c=drag_c, v_min=0.0, v_max=v_max)
         if out_of_bounds(nxt[:3], world_bounds=world_bounds):
             termination = "wall"; break
         state = nxt
@@ -422,8 +423,7 @@ def collect_dataset(
     seed : int
         Seeds the `np.random.default_rng` used for everything.
     marker : {"none", "dot"}
-        Heading cue baked into every frame. "none" stores binary uint8 frames;
-        a marker stores grayscale float32 frames. Default from config.
+        Heading cue baked into every frame. Default from config.
     progress_every : int
         Print a progress line every N attempted episodes.
 
@@ -432,7 +432,7 @@ def collect_dataset(
     Notes
     -----
     Stored at the top level of the HDF5 file:
-      frames           (T, H, W) uint8 (binary) or float32 (marker)  gzip-compressed
+      frames           (T, H, W) uint8, = round(render*frame_scale)   gzip-compressed
       states           (T, 3)    float32
       actions          (T, 2)    float32
       episode_starts   (E,)      int64   index into the flat arrays
@@ -449,14 +449,17 @@ def collect_dataset(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    frames_dtype = "uint8" if marker == "none" else "float32"
-
+    # Frames are ALWAYS stored quantized to uint8 (value = round(render * FRAME_SCALE)). The renderer
+    # emits [0,1] with very few distinct levels (a ring marker is 0 / 0.5 / 1), so float32 spent 4
+    # bytes on ~1.6 bits: a 1.3M-frame 64x64 bicycle set is 19.5 GB as f32 versus 4.9 GB as uint8.
+    # Readers divide by the `frame_scale` attribute to recover [0,1]; files written before this
+    # change have no such attribute and are read at scale 1.0, so old datasets still load correctly.
     with h5py.File(path, "w") as f:
         frames_ds = f.create_dataset(
             "frames",
             shape=(0, grid_size, grid_size),
             maxshape=(None, grid_size, grid_size),
-            dtype=frames_dtype,
+            dtype="uint8",
             chunks=(64, grid_size, grid_size),
             compression="gzip",
         )
@@ -493,7 +496,7 @@ def collect_dataset(
                 frames, states, actions, termination, velocities = run_bicycle_episode(
                     rng, max_steps=max_steps, grid_size=grid_size, world_bounds=world_bounds, dt=dt,
                     hold_k=hold_k, v_mean=v_mean, v_std=v_std, v_max=v_max, a_max=a_max,
-                    delta_max=delta_max, wheelbase=wheelbase, marker=marker, nose_radius=nose_radius,
+                    delta_max=delta_max, wheelbase=wheelbase, drag_c=drag_c, marker=marker, nose_radius=nose_radius,
                 )
             else:
                 frames, states, actions, termination = run_episode(
@@ -509,6 +512,7 @@ def collect_dataset(
                 continue
 
             L = len(states)
+            frames = np.rint(np.asarray(frames, np.float32) * FRAME_SCALE).astype(np.uint8)  # [0,1] -> 0..255
             for ds, block in ((frames_ds, frames), (states_ds, states), (actions_ds, actions)):
                 ds.resize(ds.shape[0] + L, axis=0)
                 ds[-L:] = block
@@ -532,6 +536,7 @@ def collect_dataset(
         f.create_dataset("termination",     data=np.asarray(term_codes,      dtype=np.uint8))
 
         # Generative parameters: file is self-describing.
+        f.attrs["frame_scale"] = FRAME_SCALE         # divide frames by this to recover the [0,1] render
         f.attrs["grid_size"] = grid_size
         f.attrs["world_bounds"] = np.asarray(world_bounds, dtype=np.float64)
         f.attrs["dt"] = dt

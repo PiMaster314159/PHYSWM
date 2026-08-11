@@ -131,7 +131,7 @@ class GroundedPredictor(nn.Module):
         # higher-order gray-box residual on the block, conditioned on the FREE latent. 'basis' builds a
         # structured physics residual whose per-context coefficients c_k(free) are a linear readout of the
         # 124 free dims; 'mlp' feeds those same free dims into a free-form net. Toggle with residual_mode.
-        self.residual = make_residual(residual_mode, dt, block_budget, free_dim=latent_dim - block_dim)
+        self.residual = make_residual(residual_mode, dt, block_budget, free_dim=latent_dim - block_dim, dynamics=dynamics)
 
     def forward(self, z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         K          = self.block_dim

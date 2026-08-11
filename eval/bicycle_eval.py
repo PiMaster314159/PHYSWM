@@ -58,6 +58,17 @@ def evaluate(model, a, data_path, report_dir):
     print(f"  VELOCITY  v_rmse {v_rmse:.4f}  v_corr {v_corr:+.3f}   <- did it recover hidden speed from history?")
     print(f"  1-step    pos_err {pe:.4f}  theta_mae {hmae:6.2f} deg  v_err {ve:.4f}")
 
+    # recovered gray-box residual (Stage 2a: drag reads out as a negative v^2 on the 'velocity' channel)
+    res = getattr(model, "residual", None) or getattr(getattr(model, "predictor", None), "residual", None)
+    if res is not None and hasattr(res, "named_coeffs"):
+        from models.components import format_residual
+        free = None
+        if getattr(res, "free_dim", 0) > 0:                # grounded: coeffs vary with the free latent
+            with torch.no_grad():
+                z = model.encode(next(iter(va))["frame"].to(device))
+            free = z[:, model.block_dim:].mean(0, keepdim=True)
+        print("\n" + format_residual(res, free))
+
     metrics = {"model": a.model, "run": a.run, "dynamics": "bicycle", "n_frames": a.n_frames,
                "pose": {"pos_rmse": pos_rmse, "theta_mae_deg": theta_mae},
                "velocity": {"v_rmse": v_rmse, "v_corr": v_corr},

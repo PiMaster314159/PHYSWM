@@ -53,6 +53,10 @@ SEED = 0
 # needing a fresh RUN and re-collection, not an in-place tweak.
 DT = 0.1                                 # simulation timestep
 WHEELBASE = 0.10                         # bicycle-model wheelbase (world units): yaw rate = v/WHEELBASE * tan(delta)
+# Frames are stored as uint8 round(render*FRAME_SCALE) and divided by it on read. 254 rather than the
+# usual 255 so the renderer's exact levels (0, 0.5, 1) round-trip BIT-EXACTLY -- 0.5*255 = 127.5 does
+# not. Arbitrary values in [0,1] still quantize just as finely (max error 1/508).
+FRAME_SCALE = 254.0
 L = 0.12                                 # triangle length (altitude) in world units
 W = 0.06                                 # triangle base width in world units
 WORLD_BOUNDS = ((0.0, 1.0), (0.0, 1.0))  # ((x_min, x_max), (y_min, y_max))

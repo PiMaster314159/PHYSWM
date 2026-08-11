@@ -10,6 +10,7 @@
 # Same root-finding pattern as the files in `data`.
 
 
+import os
 import sys
 from pathlib import Path
 
@@ -31,6 +32,54 @@ from torch.utils.data import Dataset, DataLoader
 from typing import Optional, Union
 
 
+FRAMES_RAM_BUDGET_GB = float(os.environ.get("PHYSWM_FRAMES_RAM_GB", "6"))
+
+
+def _load_frames_if_small(h5_path):
+    """Read the whole `frames` array into RAM if it fits FRAMES_RAM_BUDGET_GB, else None (stay lazy).
+
+    Loaded ONCE per make_*_dataloaders call and shared by the train and val datasets. That sharing
+    matters: each Dataset used to do `f["frames"][:]` independently -- and because the `episodes`
+    argument only subsets the index (not the frames), train and val each pulled the FULL array, so a
+    19.5 GB dataset asked the host for 39 GB. uint8 storage puts the bicycle set at ~4.9 GB, which
+    fits here comfortably and avoids per-sample gzip decompression entirely."""
+    with h5py.File(h5_path, "r") as f:
+        ds = f["frames"]
+        if ds.size * ds.dtype.itemsize <= FRAMES_RAM_BUDGET_GB * 1e9:
+            return ds[:]
+    return None
+
+
+class _LazyFrames:
+    """Frame access shared by every Dataset here, in-RAM or on-disk, plus the uint8 -> float rescale.
+
+    When `frames` is handed in (the common case: it fit the RAM budget) reads are plain memory
+    lookups. Otherwise the array stays ON DISK and is read a row at a time via h5py, so a dataset
+    far larger than RAM still trains -- at the cost of decompressing a gzip chunk per random read,
+    which is worth spending DataLoader workers on (`num_workers>0`). Do NOT add workers on the
+    in-RAM path: Windows spawns rather than forks, so every worker would pickle its own full copy.
+
+    Frames are stored quantized (see `frame_scale`); `_to_f32` divides them back to the [0,1] range
+    the renderer and the model both speak. Legacy files without the attribute scale by 1.0."""
+
+    def _init_frames(self, h5_path, frames=None) -> None:
+        self._frames_h5_path = str(h5_path)
+        self._frames_ds = frames                    # in-RAM array, or None -> open the file on first use
+        with h5py.File(h5_path, "r") as f:
+            self._frame_scale = float(f.attrs.get("frame_scale", 1.0))
+
+    @property
+    def frames(self):
+        if self._frames_ds is None:                 # opened lazily so the handle is created INSIDE
+            self._frames_ds = h5py.File(self._frames_h5_path, "r")["frames"]   # each worker process
+        return self._frames_ds
+
+    def _to_f32(self, arr) -> torch.Tensor:
+        """Frame array (uint8 or float32) -> float32 tensor in [0,1]."""
+        t = torch.from_numpy(np.asarray(arr)).to(torch.float32)
+        return t if self._frame_scale == 1.0 else t / self._frame_scale
+
+
 # ## RobotTransitions
 # 
 # PyTorch Dataset over the HDF5 file. Loads everything into RAM on init so DataLoader workers don't fight over an open HDF5 handle. Pass a list of episode indices to `episodes` for train/val subsets (the split itself lives in `make_dataloaders`).
@@ -38,7 +87,7 @@ from typing import Optional, Union
 # `step` sets the prediction horizon. `step=1` is single-step (`frame_t -> frame_{t+1}`). `step>1` forms hold-aligned, non-overlapping windows so each transition spans one constant action; it requires `step` to divide the dataset's `hold_k`. Over a window the same action is applied `step` times, so `frame_{t+step}` is where that one action takes the robot, and the accumulated rotation is large enough that heading finally matters to the prediction.
 
 
-class RobotTransitions(Dataset):
+class RobotTransitions(_LazyFrames, Dataset):
     """Transition pairs (frame_t, action_t, frame_{t+step}) from an HDF5 dataset.
 
     Parameters
@@ -62,9 +111,10 @@ class RobotTransitions(Dataset):
         episodes : Optional[npt.NDArray[np.int64]] = None,
         return_state: bool = False,
         step: int = PRED_STEP,
+        frames=None,
     ):
+        self._init_frames(h5_path, frames)
         with h5py.File(h5_path, "r") as f:
-            self.frames    = f["frames"][:]
             self.actions   = f["actions"][:]
             self.states    = f["states"][:] if return_state else None
             self.velocities = f["velocities"][:] if ("velocities" in f and return_state) else None  # bicycle: hidden v
@@ -96,8 +146,8 @@ class RobotTransitions(Dataset):
         i = int(self.index[idx])
         j = i + self.step
 
-        frame      = torch.from_numpy(self.frames[i]).to(torch.float32).unsqueeze(0)
-        next_frame = torch.from_numpy(self.frames[j]).to(torch.float32).unsqueeze(0)
+        frame      = self._to_f32(self.frames[i]).unsqueeze(0)
+        next_frame = self._to_f32(self.frames[j]).unsqueeze(0)
         action     = torch.from_numpy(self.actions[i]).to(torch.float32)
 
         sample = {"frame": frame, "action": action, "next_frame": next_frame}
@@ -149,15 +199,15 @@ class RobotTransitions(Dataset):
 # Shuffles episode indices with a seeded RNG, splits into train/val, and returns two DataLoaders. Split is at the episode level so consecutive frames from the same trajectory never straddle train and val.
 
 
-class RolloutWindows(Dataset):
+class RolloutWindows(_LazyFrames, Dataset):
     """Windows for multi-step rollout training: a start frame, K held actions, and the true
     poses at horizons 0..K. The model encodes the frame once and rolls K dynamics steps.
     Window starts are hold-aligned (stride `step`); episodes too short for K transitions
     contribute nothing. Only the FIRST frame is returned (the rollout is open-loop)."""
 
-    def __init__(self, h5_path, episodes=None, K: int = 4, step: int = PRED_STEP):
+    def __init__(self, h5_path, episodes=None, K: int = 4, step: int = PRED_STEP, frames=None):
+        self._init_frames(h5_path, frames)
         with h5py.File(h5_path, "r") as f:
-            self.frames  = f["frames"][:]
             self.actions = f["actions"][:]
             self.states  = f["states"][:]
             starts  = f["episode_starts"][:]
@@ -182,8 +232,8 @@ class RolloutWindows(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         b, step, K = int(self.index[idx]), self.step, self.K
-        frame = torch.from_numpy(self.frames[b]).to(torch.float32).unsqueeze(0)
-        next_frame = torch.from_numpy(self.frames[b + step]).to(torch.float32).unsqueeze(0)   # after action_0
+        frame = self._to_f32(self.frames[b]).unsqueeze(0)
+        next_frame = self._to_f32(self.frames[b + step]).unsqueeze(0)                         # after action_0
         acts  = torch.stack([torch.from_numpy(self.actions[b + k * step]).to(torch.float32) for k in range(K)])
         poses = torch.stack([torch.from_numpy(self.states[b + k * step]).to(torch.float32) for k in range(K + 1)])
         return {"frame": frame, "next_frame": next_frame, "actions": acts, "poses": poses}
@@ -205,22 +255,23 @@ def make_rollout_dataloaders(
     perm  = rng.permutation(n_ep)
     n_val = int(round(val_frac * n_ep))
     val_ep, train_ep = perm[:n_val], perm[n_val:]
-    train_ds = RolloutWindows(h5_path, episodes=train_ep, K=K, step=step)
-    val_ds   = RolloutWindows(h5_path, episodes=val_ep,   K=K, step=step)
+    frames = _load_frames_if_small(h5_path)            # loaded once, shared by train and val
+    train_ds = RolloutWindows(h5_path, episodes=train_ep, K=K, step=step, frames=frames)
+    val_ds   = RolloutWindows(h5_path, episodes=val_ep,   K=K, step=step, frames=frames)
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=num_workers)
     val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
     return train_dl, val_dl
 
 
-class HistoryTransitions(Dataset):
+class HistoryTransitions(_LazyFrames, Dataset):
     """Like RobotTransitions but each example carries a STACK of `stack` frames (at stride
     `step`) ending at frame_t, plus the same stack ending at frame_{t+step}. The encoder reads
     pose off the newest frame and the hidden gain off the motion across the stack. Also returns
     the true (x,y,theta) for t and t+step, and the per-episode `gain` (the hidden parameter)."""
 
-    def __init__(self, h5_path, episodes=None, stack: int = 4, step: int = PRED_STEP):
+    def __init__(self, h5_path, episodes=None, stack: int = 4, step: int = PRED_STEP, frames=None):
+        self._init_frames(h5_path, frames)
         with h5py.File(h5_path, "r") as f:
-            self.frames  = f["frames"][:]
             self.actions = f["actions"][:]
             self.states  = f["states"][:]
             self.gains   = f["gains"][:] if "gains" in f else None
@@ -249,7 +300,7 @@ class HistoryTransitions(Dataset):
     def _stack_at(self, end: int) -> torch.Tensor:
         step, K = self.step, self.stack
         frs = [self.frames[end - (K - 1 - k) * step] for k in range(K)]   # oldest .. newest(end)
-        return torch.from_numpy(np.stack(frs)).to(torch.float32)          # (stack, H, W)
+        return self._to_f32(np.stack(frs))                                # (stack, H, W)
 
     def _actions_at(self, end: int) -> torch.Tensor:
         """The commanded actions aligned with the frame stack (same positions as _stack_at). The
@@ -294,23 +345,25 @@ def make_history_dataloaders(
     perm  = rng.permutation(n_ep)
     n_val = int(round(val_frac * n_ep))
     val_ep, train_ep = perm[:n_val], perm[n_val:]
-    train_ds = HistoryTransitions(h5_path, episodes=train_ep, stack=stack, step=step)
-    val_ds   = HistoryTransitions(h5_path, episodes=val_ep,   stack=stack, step=step)
+    frames = _load_frames_if_small(h5_path)            # loaded once, shared by train and val
+    train_ds = HistoryTransitions(h5_path, episodes=train_ep, stack=stack, step=step, frames=frames)
+    val_ds   = HistoryTransitions(h5_path, episodes=val_ep,   stack=stack, step=step, frames=frames)
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=num_workers)
     val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
     return train_dl, val_dl
 
 
-class HistoryRolloutWindows(Dataset):
+class HistoryRolloutWindows(_LazyFrames, Dataset):
     """Stack-aware open-loop rollout windows for the hidden-ego model. Each example carries a STACK
     of `stack` frames (at stride `step`) ending at the start, plus the action history over that
     stack (to encode pose_0 AND the hidden gain a_v); then K held actions to roll the dynamics
     forward, the true poses at horizons 0..K, and the per-episode true gain. Window starts need
     both the (stack-1)*step history before them and K*step successors after."""
 
-    def __init__(self, h5_path, episodes=None, stack: int = 4, K: int = 8, step: int = PRED_STEP):
+    def __init__(self, h5_path, episodes=None, stack: int = 4, K: int = 8, step: int = PRED_STEP,
+                 frames=None):
+        self._init_frames(h5_path, frames)
         with h5py.File(h5_path, "r") as f:
-            self.frames  = f["frames"][:]
             self.actions = f["actions"][:]
             self.states  = f["states"][:]
             self.gains   = f["gains"][:] if "gains" in f else None
@@ -338,7 +391,7 @@ class HistoryRolloutWindows(Dataset):
     def _stack_at(self, end: int) -> torch.Tensor:
         step, K = self.step, self.stack
         frs = [self.frames[end - (K - 1 - k) * step] for k in range(K)]
-        return torch.from_numpy(np.stack(frs)).to(torch.float32)          # (stack, H, W)
+        return self._to_f32(np.stack(frs))                                # (stack, H, W)
 
     def _actions_at(self, end: int) -> torch.Tensor:
         step, K = self.step, self.stack
@@ -380,8 +433,9 @@ def make_history_rollout_dataloaders(
     perm  = rng.permutation(n_ep)
     n_val = int(round(val_frac * n_ep))
     val_ep, train_ep = perm[:n_val], perm[n_val:]
-    train_ds = HistoryRolloutWindows(h5_path, episodes=train_ep, stack=stack, K=K, step=step)
-    val_ds   = HistoryRolloutWindows(h5_path, episodes=val_ep,   stack=stack, K=K, step=step)
+    frames = _load_frames_if_small(h5_path)            # loaded once, shared by train and val
+    train_ds = HistoryRolloutWindows(h5_path, episodes=train_ep, stack=stack, K=K, step=step, frames=frames)
+    val_ds   = HistoryRolloutWindows(h5_path, episodes=val_ep,   stack=stack, K=K, step=step, frames=frames)
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
     return train_dl, val_dl
@@ -446,8 +500,9 @@ def make_dataloaders(
     n_val = int(round(val_frac * n_ep))
     val_ep, train_ep = perm[:n_val], perm[n_val:]
 
-    train_ds = RobotTransitions(h5_path, episodes=train_ep, return_state=return_state, step=step)
-    val_ds   = RobotTransitions(h5_path, episodes=val_ep,   return_state=return_state, step=step)
+    frames = _load_frames_if_small(h5_path)            # loaded once, shared by train and val
+    train_ds = RobotTransitions(h5_path, episodes=train_ep, return_state=return_state, step=step, frames=frames)
+    val_ds   = RobotTransitions(h5_path, episodes=val_ep,   return_state=return_state, step=step, frames=frames)
 
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=num_workers)
     val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=num_workers)
