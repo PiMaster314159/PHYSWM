@@ -59,6 +59,7 @@ def evaluate(model, a, data_path, report_dir):
     print(f"  1-step    pos_err {pe:.4f}  theta_mae {hmae:6.2f} deg  v_err {ve:.4f}")
 
     # recovered gray-box residual (Stage 2a: drag reads out as a negative v^2 on the 'velocity' channel)
+    coeffs = None
     res = getattr(model, "residual", None) or getattr(getattr(model, "predictor", None), "residual", None)
     if res is not None and hasattr(res, "named_coeffs"):
         from models.components import format_residual
@@ -68,11 +69,19 @@ def evaluate(model, a, data_path, report_dir):
                 z = model.encode(next(iter(va))["frame"].to(device))
             free = z[:, model.block_dim:].mean(0, keepdim=True)
         print("\n" + format_residual(res, free))
+        # Persist them: the recovered -v^2 coefficient IS the drag result, and re-running the whole
+        # eval just to scrape it off stdout is wasteful. Shape: {channel: {basis_term: coefficient}}.
+        try:
+            coeffs = {ch: {t: float(c) for t, c in terms.items()}
+                      for ch, terms in res.named_coeffs(free).items()}
+        except Exception as e:                             # a readout failure must never kill the eval
+            print(f"  (could not serialize residual coeffs: {e})")
 
     metrics = {"model": a.model, "run": a.run, "dynamics": "bicycle", "n_frames": a.n_frames,
                "pose": {"pos_rmse": pos_rmse, "theta_mae_deg": theta_mae},
                "velocity": {"v_rmse": v_rmse, "v_corr": v_corr},
-               "predict": {"pos_err": pe, "theta_mae_deg": hmae, "v_err": ve}}
+               "predict": {"pos_err": pe, "theta_mae_deg": hmae, "v_err": ve},
+               "residual_coeffs": coeffs}
     with open(report_dir / "metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
     print(f"wrote {report_dir / 'metrics.json'}")
