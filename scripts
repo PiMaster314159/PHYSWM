@@ -1,0 +1,44 @@
+python train.py --model ego --run 64x64_bicycle --n-frames 4 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500; python train.py --model grounded --run 64x64_bicycle --n-frames 4 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500; python train.py --model ego --run 64x64_bicycle --n-frames 1 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500; python train.py --model grounded --run 64x64_bicycle --n-frames 1 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500
+
+Get-ChildItem results/64x64_bicycle -Recurse -Filter metrics.json | ForEach-Object { $m = Get-Content $_.FullName | ConvertFrom-Json; "{0,-9} n={1}  v_corr {2:N3}  v_rmse {3:N3}  pos_rmse {4:N3}" -f $m.model, $m.n_frames, $m.velocity.v_corr, $m.velocity.v_rmse, $m.pose.pos_rmse }
+
+python datagen/make_bicycle_dataset.py --name 64x64_bicycle_drag --drag-c 1.0
+python train.py --model ego --run 64x64_bicycle_drag --n-frames 4 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500; python train.py --model ego --run 64x64_bicycle_drag --n-frames 4 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --residual basis --steps-per-epoch 500; python train.py --model grounded --run 64x64_bicycle_drag --n-frames 4 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500; python train.py --model grounded --run 64x64_bicycle_drag --n-frames 4 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --residual basis --steps-per-epoch 500
+
+python train.py --model ego --run 64x64_bicycle --n-frames 4 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500 && python train.py --model grounded --run 64x64_bicycle --n-frames 4 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500 && python train.py --model ego --run 64x64_bicycle --n-frames 1 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500 && python train.py --model grounded --run 64x64_bicycle --n-frames 1 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500
+
+
+(physwm) C:\Users\donov\Desktop\PHYSWM\PHYSWM>python train.py --model ego --run 64x64_bicycle --n-frames 4 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500 && python train.py --model grounded --run 64x64_bicycle --n-frames 4 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500 && python train.py --model ego --run 64x64_bicycle --n-frames 1 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500 && python train.py --model grounded --run 64x64_bicycle --n-frames 1 --epochs 20 --lam-anchor 1 --lam-anchor-pred 1 --steps-per-epoch 500
+grid_size 128 -> 64  (inferred from 64x64_bicycle.h5)
+dynamics = bicycle  (5-D state [x,y,cos,sin,v], action (a,delta); inferred from 64x64_bicycle.h5)
+=== 64x64_bicycle/ego/s1_e20_v1_fg5_anc1_ancp1_hist4_bike_mlpdec ===
+device=cuda  data=64x64_bicycle.h5  model=ego  anchor=1.0 anchor_pred=1.0
+Traceback (most recent call last):
+  File "C:\Users\donov\Desktop\PHYSWM\PHYSWM\train.py", line 339, in <module>
+    main()
+  File "C:\Users\donov\Desktop\PHYSWM\PHYSWM\train.py", line 327, in main
+    train_standard(model, a, data_path, ckpt_path, report_dir)
+  File "C:\Users\donov\Desktop\PHYSWM\PHYSWM\train.py", line 202, in train_standard
+    train_dl, val_dl = make_dataloaders(data_path, batch_size=a.batch_size, seed=C.SEED,
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\donov\Desktop\PHYSWM\PHYSWM\models\dataset.py", line 439, in make_dataloaders
+    return make_history_dataloaders(h5_path, batch_size=batch_size, val_frac=val_frac,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\donov\Desktop\PHYSWM\PHYSWM\models\dataset.py", line 298, in make_history_dataloaders
+    val_ds   = HistoryTransitions(h5_path, episodes=val_ep,   stack=stack, step=step)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\donov\Desktop\PHYSWM\PHYSWM\models\dataset.py", line 223, in __init__
+    self.frames  = f["frames"][:]
+                   ~~~~~~~~~~~^^^
+  File "h5py/_objects.pyx", line 54, in h5py._objects.with_phil.wrapper
+  File "h5py/_objects.pyx", line 55, in h5py._objects.with_phil.wrapper
+  File "C:\Users\donov\Miniconda3\envs\physwm\Lib\site-packages\h5py\_hl\dataset.py", line 872, in __getitem__
+    return self._fast_reader.read(args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "h5py/_objects.pyx", line 54, in h5py._objects.with_phil.wrapper
+  File "h5py/_objects.pyx", line 55, in h5py._objects.with_phil.wrapper
+  File "h5py/_selector.pyx", line 385, in h5py._selector.Reader.read
+  File "h5py/_selector.pyx", line 358, in h5py._selector.Reader.make_array
+numpy._core._exceptions._ArrayMemoryError: Unable to allocate 19.5 GiB for an array with shape (1277970, 64, 64) and data type float32
+
+(physwm) C:\Users\donov\Desktop\PHYSWM\PHYSWM>
