@@ -1,0 +1,4 @@
+model,final_lat,final_head_deg,max_excursion,rms_lat,in_bounds
+bicycle (oracle),0.0466,5.9506,0.0701,0.0584,1
+ego (gray-box),0.0332,4.3127,0.0799,0.0581,1
+grounded,0.0331,4.5056,0.0807,0.0592,1
