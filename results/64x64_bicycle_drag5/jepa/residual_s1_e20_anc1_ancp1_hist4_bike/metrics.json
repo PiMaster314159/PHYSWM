@@ -1,0 +1,20 @@
+{
+  "model": "jepa",
+  "run": "64x64_bicycle_drag5",
+  "dynamics": "bicycle",
+  "n_frames": 4,
+  "pose": {
+    "pos_rmse": 0.016814159229397774,
+    "theta_mae_deg": 22.22206486086609
+  },
+  "velocity": {
+    "v_rmse": 0.03312041237950325,
+    "v_corr": 0.9567158818244934
+  },
+  "predict": {
+    "pos_err": 0.0219585101097109,
+    "theta_mae_deg": 21.66233853045009,
+    "v_err": 0.020780906078565368
+  },
+  "residual_coeffs": null
+}

@@ -1,0 +1,20 @@
+{
+  "model": "grounded",
+  "run": "64x64_bicycle_drag5_narrow",
+  "dynamics": "bicycle",
+  "n_frames": 4,
+  "pose": {
+    "pos_rmse": 0.011379750445485115,
+    "theta_mae_deg": 2.295972571811429
+  },
+  "velocity": {
+    "v_rmse": 0.012896936386823654,
+    "v_corr": 0.8418476581573486
+  },
+  "predict": {
+    "pos_err": 0.00934605022682159,
+    "theta_mae_deg": 2.3647570647374176,
+    "v_err": 0.009068120907981352
+  },
+  "residual_coeffs": null
+}

@@ -57,6 +57,10 @@ def parse_args():
     p.add_argument("--eval-only", action="store_true",
                    help="skip training: load the existing checkpoint for this tag and just run eval "
                         "(recover metrics after a crash). Pass the SAME flags you trained with so the tag matches")
+    p.add_argument("--resume", action="store_true",
+                   help="make the run idempotent: skip entirely if metrics.json already exists, or fall back "
+                        "to --eval-only if the checkpoint trained but eval never wrote metrics. Re-running a "
+                        "whole sweep with --resume then costs only the cells that are actually missing")
     p.add_argument("--lr", type=float, default=C.LR)
     p.add_argument("--batch-size", type=int, default=C.BATCH_SIZE)
     p.add_argument("--probe-epochs", type=int, default=40)
@@ -309,6 +313,14 @@ def main():
     ckpt_path, report_dir = C.experiment_paths(a.run, a.model, tag)
     experiment = f"{a.run}/{a.model}/{tag}"
     set_default_n_frames(a.n_frames)                   # so eval/probe make_dataloaders() also return K-frame stacks
+
+    if a.resume:                                       # idempotent sweeps: a killed grid can just be re-run
+        if (report_dir / "metrics.json").exists():
+            print(f"=== {experiment} ===\nresume: metrics.json already present -- skipping")
+            return
+        if ckpt_path.exists():                         # trained, but the eval never wrote metrics
+            print(f"=== {experiment} ===\nresume: checkpoint present, metrics missing -- evaluating only")
+            a.eval_only = True
 
     print(f"=== {experiment} ===")
     print(f"device={a.device}  data={data_path.name}  model={a.model}  "

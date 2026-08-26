@@ -1,0 +1,20 @@
+{
+  "model": "ego",
+  "run": "64x64_bicycle_drag5",
+  "dynamics": "bicycle",
+  "n_frames": 4,
+  "pose": {
+    "pos_rmse": 0.013201759196817875,
+    "theta_mae_deg": 1.856663982462906
+  },
+  "velocity": {
+    "v_rmse": 0.018913017585873604,
+    "v_corr": 0.9675639271736145
+  },
+  "predict": {
+    "pos_err": 0.01095277440468819,
+    "theta_mae_deg": 1.8565274772250975,
+    "v_err": 0.009686318934734902
+  },
+  "residual_coeffs": null
+}
