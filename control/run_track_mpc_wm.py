@@ -40,7 +40,11 @@ import matplotlib.pyplot as plt
 import config as C
 from sim.render import render_frame
 from sim.dynamics import step as true_step          # ground-truth unicycle (the real system)
+from sim.dynamics import bicycle_step as true_bicycle_step   # ground-truth bicycle+throttle
 from control.mppi import mppi_plan
+
+
+ORACLES = ("unicycle", "bicycle")   # numpy known-dynamics baselines: no checkpoint, no torch
 
 
 def wrap(a):
@@ -72,6 +76,29 @@ def build_unicycle(a):
     return observe, dynamics, pose, 3, "unicycle (oracle)", 1
 
 
+def build_bicycle(a):
+    """Naive bicycle oracle: exact kinematics, but it does NOT know about drag -- the same stance the
+    unicycle oracle takes. That is deliberate. Drag is the unmodeled physics under test, so an oracle
+    that knew it would beat every learned model for reasons that have nothing to do with the thesis.
+    Its 4-D state (x, y, theta, v) carries velocity because the throttle integrates into it."""
+    dt, L = a.dt, a.wheelbase
+
+    def observe(true_state, frame):
+        return np.asarray(true_state, float).copy()
+
+    def dynamics(S, A):
+        x, y, th, v = S[:, 0], S[:, 1], S[:, 2], S[:, 3]
+        acc, delta = A[:, 0], A[:, 1]
+        v2 = np.clip(v + acc * dt, a.v_min, a.v_max)           # no drag term: the naive model
+        th2 = wrap(th + (v2 / L) * np.tan(delta) * dt)         # steering authority scales with speed
+        return np.stack([x + v2 * np.cos(th2) * dt, y + v2 * np.sin(th2) * dt, th2, v2], axis=1)
+
+    def pose(S):
+        return S[:, :3].copy()
+
+    return observe, dynamics, pose, 4, "bicycle (oracle)", 1
+
+
 def build_neural(name, a):
     """ego / grounded / jepa. Torch-only; runs on the tower."""
     import torch
@@ -83,17 +110,25 @@ def build_neural(name, a):
     fc = sd.get("encoder.conv.0.weight")               # infer frame-stack depth from the checkpoint's first conv
     n_frames = int(fc.shape[1]) if fc is not None else 1   # (out, IN, k, k) -> IN = frames stacked as channels
 
+    dyn = a.dynamics                                   # "unicycle" | "bicycle"; must match the checkpoint
+    bike = dyn == "bicycle"
     if name == "ego":
         from models.state_ae import EgoWorldModel
-        model = EgoWorldModel(grid_size=g, dt=a.dt, learn_coeffs=True, decoder="mlp", residual_mode=a.residual, in_channels=n_frames)
-        physical = True; latent_dim = 4; label = "ego (gray-box)"
+        model = EgoWorldModel(grid_size=g, dt=a.dt, learn_coeffs=True, decoder="mlp", residual_mode=a.residual,
+                              in_channels=n_frames, dynamics=dyn, wheelbase=a.wheelbase)
+        # ego's latent IS the state, so the planner's state width follows the dynamics: 5-D for the
+        # bicycle ([x,y,cos,sin,v] -- velocity is part of the state the throttle integrates into).
+        physical = True; latent_dim = 5 if bike else 4; label = "ego (gray-box)"
     elif name == "grounded":
         from models.grounded import GroundedJEPA
-        model = GroundedJEPA(grid_size=g, latent_dim=C.LATENT_DIM, block_dim=4, dt=a.dt, learn_coeffs=True, residual_mode=a.residual, in_channels=n_frames)
+        model = GroundedJEPA(grid_size=g, latent_dim=C.LATENT_DIM, block_dim=5 if bike else 4, dt=a.dt,
+                             learn_coeffs=True, residual_mode=a.residual, in_channels=n_frames,
+                             dynamics=dyn, wheelbase=a.wheelbase)
         physical = True; latent_dim = C.LATENT_DIM; label = "grounded"
     elif name == "jepa":
         from models.jepa import JEPA
-        model = JEPA(grid_size=g, latent_dim=C.LATENT_DIM, predictor_mode="residual", state_head=True, in_channels=n_frames)
+        model = JEPA(grid_size=g, latent_dim=C.LATENT_DIM, predictor_mode="residual", state_head=True,
+                     in_channels=n_frames, dynamics=dyn)
         physical = False; latent_dim = C.LATENT_DIM; label = "residual JEPA (probe)"
     else:
         raise ValueError(f"unknown neural model {name!r}")
@@ -116,8 +151,8 @@ def build_neural(name, a):
     def to_frame(frames):                              # frames: (g,g) single or (n_frames,g,g) stack -> (1,n_frames,g,g)
         return torch.from_numpy(np.asarray(frames, np.float32)).view(1, n_frames, g, g).to(dev)
 
-    def full_action(A):                               # -> (K,2)=[v,omega] torch
-        if a.plan_speed:                              # A is already (K,2)=[v,omega]
+    def full_action(A):                               # -> (K,2) torch: [v,omega] unicycle | [accel,delta] bicycle
+        if bike or a.plan_speed:                      # already 2-D and in the model's own action space
             return torch.from_numpy(A.astype(np.float32)).to(dev)
         K = A.shape[0]                                # A is (K,1)=omega; prepend the fixed speed
         vv = torch.full((K, 1), float(v))
@@ -151,7 +186,9 @@ def make_costs(pose_fn, y_c, half, a):
     def running(S, A, S_next=None):
         P = pose_fn(S); lat = P[:, 1] - y_c; head = wrap(P[:, 2]); om = A[:, -1]
         cost = a.w_lat*lat**2 + a.w_head*head**2 + a.w_ctrl*om**2 + bound_cost(lat)
-        if a.plan_speed and S_next is not None:
+        # Bicycle always prices speed: the action IS throttle, so speed is under control by construction
+        # (there is no "fixed v" mode to fall back on).
+        if (a.plan_speed or a.dynamics == "bicycle") and S_next is not None:
             # track a reference GROUND speed. ds is the model's PREDICTED world displacement, so a
             # drag-aware model (ego gray-box) knows command v -> slower ground speed and picks the
             # right v; a naive model (no drag) commands v=v_ref and the true car then falls short.
@@ -165,7 +202,13 @@ def make_costs(pose_fn, y_c, half, a):
 
 
 def build_one(name, a):
-    observe, dynamics, pose, d, label, n_frames = (build_unicycle(a) if name == "unicycle" else build_neural(name, a))
+    if name == "unicycle":
+        built = build_unicycle(a)
+    elif name == "bicycle":
+        built = build_bicycle(a)
+    else:
+        built = build_neural(name, a)
+    observe, dynamics, pose, d, label, n_frames = built
     return observe, dynamics, pose, label, n_frames
 
 
@@ -173,22 +216,29 @@ def roll_episode(built, a, y_c, half):
     observe, dynamics, pose, label, n_frames = built
     running, terminal = make_costs(pose, y_c, half, a)
     rng = np.random.default_rng(a.seed)
-    if a.plan_speed:                                   # 2-D action [v, omega]: MPPI also plans speed
+    bike = a.dynamics == "bicycle"
+    if bike:                                           # 2-D action [accel, delta]: throttle + steering
+        a_low = np.array([-a.a_max, -a.delta_max]); a_high = np.array([a.a_max, a.delta_max])
+        sigma = np.array([a.sigma_a, a.sigma_delta]); m = 2
+    elif a.plan_speed:                                 # 2-D action [v, omega]: MPPI also plans speed
         a_low = np.array([a.v_min, -a.omega_max]); a_high = np.array([a.v_max, a.omega_max])
         sigma = np.array([a.sigma_v, a.sigma]); m = 2
     else:                                              # 1-D action [omega]: speed fixed at a.v
         a_low = np.array([-a.omega_max]); a_high = np.array([a.omega_max])
         sigma = a.sigma; m = 1
 
-    true = np.array([a.x0, y_c + a.y0, np.deg2rad(a.theta0_deg)], float)   # TRUE state (world [0,1])
+    # TRUE state (world [0,1]); the bicycle carries velocity as a 4th dim (the throttle integrates into it)
+    true = np.array([a.x0, y_c + a.y0, np.deg2rad(a.theta0_deg)] + ([a.v0] if bike else []), float)
     a_nom = np.zeros((a.horizon, m))
-    if a.plan_speed:
+    if a.plan_speed and not bike:
         a_nom[:, 0] = a.v_ref                          # warm-start the speed channel at the reference (not 0)
     traj = [true.copy()]
     pred_peak = 0.0                                     # largest |lat| the MODEL ever predicted for a committed plan
     frame_hist = deque(maxlen=n_frames)                # last n_frames rendered frames (for history checkpoints)
     for _ in range(a.steps):
-        frame = render_frame(true, grid_size=a.grid_size, marker=a.marker)
+        frame = render_frame(true[:3], grid_size=a.grid_size, marker=a.marker)   # camera sees POSE only -- the
+                                                                                 # bicycle 4th dim (v) is hidden
+
         if not frame_hist:                             # cold start: pad the buffer with the first frame
             frame_hist.extend([frame] * n_frames)
         else:
@@ -200,13 +250,19 @@ def roll_episode(built, a, y_c, half):
         if a.log_pred_excursion:                       # the model's estimate of its OWN current |lat| (localization,
             model_lat = abs(float(pose(np.asarray(s0, float)[None])[0, 1]) - y_c)   # what the constraint rollout starts from)
             pred_peak = max(pred_peak, model_lat)
-        v_cmd = float(a_nom[0, 0]) if a.plan_speed else a.v
-        omega = float(a_nom[0, -1])
-        v_true = max(0.0, a.actuator_gain * v_cmd - a.drag_c * v_cmd ** 2)        # non-ideal speed at CONTROL time
-        true = true_step(true, np.array([v_true, omega]), a.dt)                   # actuator gain + v^2 drag (truth only)
+        if bike:
+            # truth applies the SAME drag the dataset was collected with; the models must have learned it
+            true = true_bicycle_step(true, np.array([float(a_nom[0, 0]), float(a_nom[0, 1])]), a.dt,
+                                     wheelbase=a.wheelbase, drag_c=a.drag_c, gain=a.actuator_gain,
+                                     v_min=a.v_min, v_max=a.v_max)
+        else:
+            v_cmd = float(a_nom[0, 0]) if a.plan_speed else a.v
+            omega = float(a_nom[0, -1])
+            v_true = max(0.0, a.actuator_gain * v_cmd - a.drag_c * v_cmd ** 2)    # non-ideal speed at CONTROL time
+            true = true_step(true, np.array([v_true, omega]), a.dt)               # actuator gain + v^2 drag (truth only)
         traj.append(true.copy())
         a_nom = np.roll(a_nom, -1, axis=0); a_nom[-1] = 0.0
-        if a.plan_speed:
+        if a.plan_speed and not bike:
             a_nom[-1, 0] = a.v_ref                     # keep cruising; don't let planned speed decay to 0
 
     traj = np.array(traj)
@@ -217,7 +273,7 @@ def roll_episode(built, a, y_c, half):
                "max_excursion": np.abs(y_err).max(),
                "in_bounds": bool(np.abs(y_err).max() <= half + 1e-6),
                "rms_lat": float(np.sqrt((y_err**2).mean()))}
-    if a.plan_speed:                                   # achieved GROUND speed vs reference (the drag-relevant metric)
+    if a.plan_speed or bike:                           # achieved GROUND speed vs reference (the drag-relevant metric)
         step_d = np.sqrt((np.diff(traj[:, :2], axis=0) ** 2).sum(1))
         mean_speed = float(step_d.mean() / a.dt)
         metrics["mean_speed"] = mean_speed
@@ -240,7 +296,8 @@ def _sweep_color(label):
 
 def _short_name(label):
     l = label.lower()
-    return ("unicycle" if "oracle" in l or "unicycle" in l else
+    return ("bicycle" if "bicycle" in l else
+            "unicycle" if "oracle" in l or "unicycle" in l else
             "jepa" if "jepa" in l else "grounded" if "grounded" in l else "ego")
 
 
@@ -248,9 +305,12 @@ def _save_coords(traj, y_c, path):
     """Per-step rollout coords: t, x, y, heading, lateral error, heading error."""
     import csv as _csv
     with open(path, "w", newline="") as f:
-        w = _csv.writer(f); w.writerow(["t", "x", "y", "theta_rad", "lateral_err", "heading_deg"])
-        for k, (x, y, th) in enumerate(traj):
-            w.writerow([k, f"{x:.5f}", f"{y:.5f}", f"{th:.5f}", f"{y - y_c:.5f}", f"{np.rad2deg(wrap(th)):.3f}"])
+        w = _csv.writer(f); w.writerow(["t", "x", "y", "theta_rad", "lateral_err", "heading_deg", "v"])
+        for k, row in enumerate(traj):                 # bicycle rows carry a 4th dim (velocity); unicycle do not
+            x, y, th = row[0], row[1], row[2]
+            v = f"{row[3]:.5f}" if len(row) > 3 else ""
+            w.writerow([k, f"{x:.5f}", f"{y:.5f}", f"{th:.5f}", f"{y - y_c:.5f}",
+                        f"{np.rad2deg(wrap(th)):.3f}", v])
 
 
 def _overlay_figure(results, y_c, half, title, out):
@@ -336,7 +396,18 @@ def run_sweep(a, y_c, models):
 
 def parse_args():
     p = argparse.ArgumentParser(description="World-model MPC comparison on the straight track.")
-    p.add_argument("--model", default="unicycle", help="comma list: unicycle,ego,grounded,jepa")
+    p.add_argument("--model", default="unicycle", help="comma list: unicycle,bicycle,ego,grounded,jepa "
+                                                       "('bicycle' is the naive kinematic oracle, no drag)")
+    p.add_argument("--dynamics", default="unicycle", choices=["unicycle", "bicycle"],
+                   help="TRUE system + model action space. bicycle: 4-D truth (x,y,theta,v), action "
+                        "(accel, delta), velocity is a hidden state -> use history checkpoints. MUST match "
+                        "how the checkpoints were trained")
+    p.add_argument("--a-max", type=float, default=1.5, help="throttle limit |accel| (--dynamics bicycle)")
+    p.add_argument("--delta-max", type=float, default=0.6, help="steering-angle limit rad (--dynamics bicycle)")
+    p.add_argument("--wheelbase", type=float, default=C.WHEELBASE, help="bicycle wheelbase L")
+    p.add_argument("--sigma-a", type=float, default=0.6, help="MPPI exploration std on throttle")
+    p.add_argument("--sigma-delta", type=float, default=0.3, help="MPPI exploration std on steering")
+    p.add_argument("--v0", type=float, default=0.2, help="initial true speed (--dynamics bicycle)")
     p.add_argument("--ckpt-ego", default=None); p.add_argument("--ckpt-grounded", default=None)
     p.add_argument("--ckpt-jepa", default=None); p.add_argument("--ckpt", default=None,
                    help="shortcut when running a single --model")
@@ -406,7 +477,7 @@ def main():
     y_c = 0.5
     half = a.track_width / 2.0
     models = [m.strip() for m in a.model.split(",") if m.strip()]
-    if any(m != "unicycle" for m in models):          # torch only needed for neural models
+    if any(m not in ORACLES for m in models):         # torch only needed for neural models
         import torch
         if a.device != "cpu" and not torch.cuda.is_available():
             a.device = "cpu"
@@ -420,17 +491,18 @@ def main():
     for name in models:
         traj, mt = run_one(name, a, y_c, half)
         results.append((mt["model"], traj, mt))
-        speed_str = f"  mean_v {mt['mean_speed']:.3f} (ref {a.v_ref:.2f}, err {mt['speed_err']:.3f})" if a.plan_speed else ""
+        speed_str = (f"  mean_v {mt['mean_speed']:.3f} (ref {a.v_ref:.2f}, err {mt['speed_err']:.3f})"
+                     if "mean_speed" in mt else "")
         print(f"  {mt['model']:22s}  final_lat {mt['final_lat']:.3f}  "
               f"final_head {mt['final_head_deg']:5.1f} deg  max|y| {mt['max_excursion']:.3f}  "
               f"rms_lat {mt['rms_lat']:.3f}  {'IN' if mt['in_bounds'] else 'OUT of'} bounds{speed_str}")
-        if name != "unicycle":                      # merge control result into the run's metrics.json
+        if name not in ORACLES:                     # merge control result into the run's metrics.json
             ck = Path(a.ckpt_for(name))
             if len(ck.parts) >= 4 and ck.parent.parent.parent.name == "checkpoints":   # checkpoints/<run>/<model>/<tag>.pt
                 from eval.metrics import update_mpc
                 rep = C.RESULTS_DIR / ck.parent.parent.name / ck.parent.name / ck.stem
                 keys = ["final_lat", "final_head_deg", "max_excursion", "rms_lat", "in_bounds"]
-                if a.plan_speed: keys += ["mean_speed", "speed_err"]
+                if "mean_speed" in mt: keys += ["mean_speed", "speed_err"]
                 update_mpc(rep, {k: mt[k] for k in keys})
 
     # overlay figure -> results/track_mpc/<name>/ when --name is given (else the shared, overwritten files)
