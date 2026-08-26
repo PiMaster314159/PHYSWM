@@ -351,7 +351,7 @@ def run_sweep(a, y_c, models):
             se = mt.get("speed_err", float("nan"))
             rows.append((v, mt["model"], mt["final_lat"], mt["max_excursion"], mt["in_bounds"], se,
                          mt.get("pred_max_excursion", float("nan")), mt.get("excursion_gap", float("nan"))))
-            extra = f"  speed_err {se:.3f}" if a.plan_speed else ""
+            extra = f"  speed_err {se:.3f}" if se == se else ""   # NaN check: bicycle sets it too
             if a.log_pred_excursion:
                 extra += f"  pred|y| {mt['pred_max_excursion']:.3f}  gap {mt['excursion_gap']:+.3f}"
             print(f"  {a.sweep}={v:6.3f}  {mt['model']:22s}  final_lat {mt['final_lat']:.3f}  "
@@ -526,7 +526,9 @@ def main():
     print(f"wrote {out}")
 
     import csv as _csv                              # cross-model control summary (one row per model)
-    speed_cols = ["mean_speed", "speed_err"] if a.plan_speed else []
+    # bicycle always tracks speed (throttle IS the action), so key off what the rollout actually
+    # produced rather than --plan-speed, which is a unicycle-only flag
+    speed_cols = ["mean_speed", "speed_err"] if (results and "mean_speed" in results[0][2]) else []
     with open(report / "mpc_summary.csv", "w", newline="") as f:
         w = _csv.writer(f)
         w.writerow(["model", "final_lat", "final_head_deg", "max_excursion", "rms_lat", "in_bounds"] + speed_cols)

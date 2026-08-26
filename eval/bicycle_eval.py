@@ -59,7 +59,7 @@ def evaluate(model, a, data_path, report_dir):
     print(f"  1-step    pos_err {pe:.4f}  theta_mae {hmae:6.2f} deg  v_err {ve:.4f}")
 
     # recovered gray-box residual (Stage 2a: drag reads out as a negative v^2 on the 'velocity' channel)
-    coeffs = None
+    coeffs, drag_recovered, budget = None, None, None
     res = getattr(model, "residual", None) or getattr(getattr(model, "predictor", None), "residual", None)
     if res is not None and hasattr(res, "named_coeffs"):
         from models.components import format_residual
@@ -74,6 +74,17 @@ def evaluate(model, a, data_path, report_dir):
         try:
             coeffs = {ch: {t: float(c) for t, c in terms.items()}
                       for ch, terms in res.named_coeffs(free).items()}
+            # Those raw coefficients sit INSIDE budget*tanh(.), so their scale depends on the budget
+            # and they are NOT physical -- comparing them across budgets is meaningless. In the small-
+            # signal limit the velocity correction is  g_v ~= budget * coef_v2 * v^2,  while the truth
+            # is  -drag_c * dt * v^2.  Invert that so metrics.json carries a directly comparable number.
+            budget = float(getattr(res, "budget", 0.1))
+            dt = float(getattr(res, "dt", C.DT))
+            v2 = coeffs.get("velocity", {}).get("v^2")
+            if v2 is not None and dt > 0:
+                drag_recovered = -budget * v2 / dt
+                print(f"  recovered drag_c = {drag_recovered:.3f}   "
+                      f"(raw v^2 coeff {v2:+.3f} at budget {budget:g})")
         except Exception as e:                             # a readout failure must never kill the eval
             print(f"  (could not serialize residual coeffs: {e})")
 
@@ -81,7 +92,9 @@ def evaluate(model, a, data_path, report_dir):
                "pose": {"pos_rmse": pos_rmse, "theta_mae_deg": theta_mae},
                "velocity": {"v_rmse": v_rmse, "v_corr": v_corr},
                "predict": {"pos_err": pe, "theta_mae_deg": hmae, "v_err": ve},
-               "residual_coeffs": coeffs}
+               "residual_coeffs": coeffs,
+               "residual_budget": budget,
+               "drag_c_recovered": drag_recovered}   # physical, budget-independent (see above)
     with open(report_dir / "metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
     print(f"wrote {report_dir / 'metrics.json'}")
