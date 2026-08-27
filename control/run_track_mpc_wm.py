@@ -329,7 +329,9 @@ def _overlay_figure(results, y_c, half, title, out):
 def run_sweep(a, y_c, models):
     """Sweep one axis (start heading / track width / w_lat), all models, one figure + CSV.
     Models are built ONCE and rolled at every value."""
-    if a.sweep == "vref" and not a.plan_speed:
+    # v_ref only means something when speed is being planned. The unicycle needs --plan-speed for that;
+    # the bicycle always plans it, because throttle IS the action.
+    if a.sweep == "vref" and not (a.plan_speed or a.dynamics == "bicycle"):
         raise SystemExit("--sweep vref requires --plan-speed (v_ref only affects the speed-planning objective)")
     vals = [float(x) for x in a.sweep_values.split(",") if x.strip()]
     axis = {"theta": "theta0_deg", "width": "track_width", "wlat": "w_lat", "vref": "v_ref", "y0": "y0"}[a.sweep]
