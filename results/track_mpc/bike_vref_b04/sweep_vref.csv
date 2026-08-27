@@ -1,0 +1,16 @@
+vref,model,final_lat,max_excursion,in_bounds,speed_err,pred_max_excursion,excursion_gap
+0.15,bicycle (oracle),0.0732,0.0732,1,0.0644,nan,nan
+0.15,ego (gray-box),0.0806,0.0811,1,0.0372,nan,nan
+0.15,grounded,0.0633,0.0693,1,0.0332,nan,nan
+0.2,bicycle (oracle),0.0643,0.0702,1,0.0771,nan,nan
+0.2,ego (gray-box),0.0626,0.0801,1,0.0372,nan,nan
+0.2,grounded,0.0468,0.0713,1,0.0310,nan,nan
+0.25,bicycle (oracle),0.0466,0.0701,1,0.0741,nan,nan
+0.25,ego (gray-box),0.0495,0.0793,1,0.0531,nan,nan
+0.25,grounded,0.0390,0.0733,1,0.0485,nan,nan
+0.3,bicycle (oracle),0.0356,0.0699,1,0.0882,nan,nan
+0.3,ego (gray-box),0.0369,0.0786,1,0.0717,nan,nan
+0.3,grounded,0.0343,0.0792,1,0.0672,nan,nan
+0.35,bicycle (oracle),0.0280,0.0715,1,0.1106,nan,nan
+0.35,ego (gray-box),0.0348,0.0837,1,0.0927,nan,nan
+0.35,grounded,0.0250,0.0788,1,0.0898,nan,nan
